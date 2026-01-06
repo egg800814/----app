@@ -1,0 +1,576 @@
+import os
+import random
+import math
+from PyQt5.QtWidgets import QWidget
+from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap
+from PyQt5.QtMultimedia import QSoundEffect
+from utils.config import COLORS
+
+class LuckyWheelWidget(QWidget):
+    spinFinished = pyqtSignal(str)
+    
+    def get_angle(self):
+        return self.current_angle
+
+    def set_angle(self, val):
+        self.current_angle = val
+        self.update()
+        self._process_tick_logic_only() # 在動畫模式下，只處理由角度變動觸發的單音
+
+    angle = pyqtProperty(float, fget=get_angle, fset=set_angle)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.items = ["員工A", "員工B", "員工C", "員工D", "員工E"] 
+        self.current_angle = 0
+        self.rotation_speed = 0
+        self.is_spinning = False
+        self.base_friction = 0.99 # 一般滑行摩擦力 (阻力小)
+        self.peg_friction = 0.85  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
+        self.friction = self.base_friction # 當前摩擦力
+        
+        # 音效設定
+        # 音效設定 (建立音效池以支援多重發聲)
+        self.tick_sounds = []
+        self.tick_index = 0
+        if os.path.exists("assets/sounds/tick.wav"):
+            for _ in range(50): # 建立 50 個音效實例，避免快速轉動時不夠用
+                effect = QSoundEffect()
+                effect.setSource(QUrl.fromLocalFile("assets/sounds/tick.wav"))
+                effect.setVolume(1.0) # 音量全開
+                self.tick_sounds.append(effect)
+        
+        # 載入循環音效 (快/中/慢)
+        self.snd_fast = self._load_loop_sound("assets/sounds/fast.wav")
+        self.snd_medium = self._load_loop_sound("assets/sounds/medium.wav")
+        self.snd_slow = self._load_loop_sound("assets/sounds/slow.wav")
+        self.current_sound_mode = None # None, 'fast', 'medium', 'slow'
+
+        # 轉盤邏輯
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_spin)
+        self.last_sector_index = -1
+        
+        # 圖片資源
+        self.presenter_pixmap = None 
+        self.logo_pixmap = None
+        self.load_default_logo()
+
+        # LED 裝飾邏輯
+        self.led_count = 36
+        self.led_phase = 0.0
+        self.led_timer = QTimer(self)
+        self.led_timer.timeout.connect(self.update_leds)
+        self.led_timer.start(50) # 20 FPS for LEDs (順暢度足夠)
+
+    def _load_loop_sound(self, filename):
+        if os.path.exists(filename):
+            snd = QSoundEffect(self)
+            snd.setSource(QUrl.fromLocalFile(filename))
+            snd.setLoopCount(QSoundEffect.Infinite)
+            snd.setVolume(1.0)
+            return snd
+        return None
+
+    def load_default_logo(self):
+        if os.path.exists("assets/images/logo.png"):
+            self.logo_pixmap = QPixmap("assets/images/logo.png")
+
+    def set_items(self, items_text):
+        if isinstance(items_text, list):
+             self.items = items_text
+        elif not items_text.strip():
+            self.items = []
+        else:
+            self.items = [line.strip() for line in items_text.split('\n') if line.strip()]
+        self.update()
+
+    def set_presenter_avatar(self, image_path):
+        size = 100
+        if image_path:
+            original = QPixmap(image_path)
+            self.presenter_pixmap = QPixmap(size, size)
+            self.presenter_pixmap.fill(Qt.transparent)
+            painter = QPainter(self.presenter_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            path = QPainterPath()
+            path.addEllipse(0, 0, size, size)
+            painter.setClipPath(path)
+            painter.drawPixmap(0, 0, size, size, original)
+            painter.end()
+        else:
+            self.presenter_pixmap = None
+        self.update()
+
+    def update_leds(self):
+        # LED 動畫更新
+        if self.is_spinning:
+            # 跑馬燈模式：速度隨轉速變化
+            # rotation_speed 是 "度/10ms"，這裡 led_timer 是 50ms 一次
+            # 讓 LED 跑動速度跟轉盤看起來有連動感
+            speed_factor = self.rotation_speed * 0.5 
+            if speed_factor < 0.5: speed_factor = 0.5 # 最低速度
+            self.led_phase = (self.led_phase + speed_factor) % self.led_count
+        else:
+            # 呼吸燈模式
+            self.led_phase += 0.4 # 加快速度製造緊張感
+        
+        # 如果沒有在轉動 (update_spin 沒在跑)，這裡要觸發 update 讓 LED 動起來
+        if not self.is_spinning:
+            self.update()
+
+    def _update_sound_volumes(self, mode):
+        # 根據模式調整音量 (只開啟對應模式的聲音)
+        if self.snd_fast: self.snd_fast.setVolume(1.0 if mode == 'fast' else 0.0)
+        if self.snd_medium: self.snd_medium.setVolume(1.0 if mode == 'medium' else 0.0)
+        if self.snd_slow: self.snd_slow.setVolume(1.0 if mode == 'slow' else 0.0)
+
+    def start_spin(self, initial_speed=None):
+        if not self.items or self.is_spinning:
+            return
+        
+        if initial_speed is not None:
+             self.rotation_speed = initial_speed
+        else:
+             self.rotation_speed = random.uniform(25, 40)
+             
+        self.is_spinning = True
+        
+        # [預先啟動所有循環音效] 以音量控制切換，避免播放時 lag
+        if self.snd_fast: 
+            self.snd_fast.setVolume(0)
+            self.snd_fast.play()
+        if self.snd_medium:
+            self.snd_medium.setVolume(0) 
+            self.snd_medium.play()
+        if self.snd_slow: 
+            self.snd_slow.setVolume(0)
+            self.snd_slow.play()
+        
+        # 初始狀態通常是 fast (如果速度夠快)
+        initial_mode = 'fast' if self.rotation_speed > 20 else 'tick'
+        self._update_sound_volumes(initial_mode)
+        self.current_sound_mode = initial_mode
+        
+        self.timer.start(10) # [修正] 提高更新頻率，讓動畫更流暢 (原本16ms=60fps, 10ms=100fps) 
+
+    def update_spin(self):
+        self.current_angle += self.rotation_speed
+        self.current_angle %= 360
+
+        # [新增] 真實物理場模擬 (Potential Energy Field)
+        # 將擋板視為高能量區，指針在中間是低能量區
+        # 當指針靠近擋板(扇區邊緣)時，會受到一個「排斥力/推力」使其離開擋板
+        n = len(self.items)
+        if n > 0:
+            slice_angle = 360 / n
+            offset = (270 - self.current_angle) % slice_angle
+            
+            # 參數設定
+            peg_influence = 0.5  # [修正] 縮小影響範圍 (只在交界處 1 度內)
+            force_strength = 0.24 # 原本的力道
+            
+            total_force = 0
+            
+            # [修正] 物理邏輯：前進時給予強大阻力 (撞擊)，後退時給予極小推力 (滑落)
+            # 避免像彈簧一樣劇烈反彈
+            # [修正] 全對稱擋板物理邏輯
+            # 無論正轉或反轉，撞到擋板都會受到相同的物理阻力
+            
+            # 1. 檢測與"下一個擋板" (扇區終點) 的碰撞 -> 產生負向推力 (阻擋正轉)
+            dist_from_end = slice_angle - offset
+            if dist_from_end < peg_influence:
+                factor = (peg_influence - dist_from_end) / peg_influence
+                total_force -= force_strength * factor 
+
+            # 2. 檢測與"上一個擋板" (扇區起點) 的碰撞 -> 產生正向推力 (阻擋反轉)
+            if offset < peg_influence:
+                factor = (peg_influence - offset) / peg_influence
+                total_force += force_strength * factor 
+            
+            # 儲存舊速度以偵測碰撞反彈
+            old_speed = self.rotation_speed
+            
+            # [修正] 避免反彈後持續被力場加速
+            # 如果力場方向與速度方向相同 (代表正在被推著跑/反彈加速中)
+            # 大幅削減這個推力，讓它變成 "滑落" 而非 "加速"
+            if (total_force * self.rotation_speed) > 0:
+                total_force *= 0.05 # [強制修正] 用戶之前改回0.6導致搖擺，這裡強制改回0.05以消除搖擺
+            
+            self.rotation_speed += total_force
+
+            # [新增] 磁力歸中機制 (Center Magnet)
+            # 當速度慢下來時，施加一個微小的力，將指針拉向扇區的正中央
+            # 這能保證轉盤永遠不會停在交界處 (解決"無法判定中獎"的問題)
+            if abs(self.rotation_speed) < 5.0:
+                center_offset = slice_angle / 2
+                dist_to_center = center_offset - offset
+                # 磁力係數，越靠近中心吸力越小
+                magnet_force = dist_to_center * 0.03 
+                self.rotation_speed += magnet_force
+            
+            # [新增] 只有在 "離開擋板" (回彈滑落) 的時候，施加超重摩擦力
+            is_rebounding_next = (dist_from_end < peg_influence and self.rotation_speed < 0)
+            is_rebounding_prev = (offset < peg_influence and self.rotation_speed > 0)
+            
+            if is_rebounding_next or is_rebounding_prev:
+                self.rotation_speed *= 0.85 # 強力阻尼
+                
+            # [核心修正] 動能耗損邏輯
+            
+            # [核心修正] 動能耗損邏輯
+            # 當速度方向改變 (例如正轉變反轉，代表撞到擋板彈回來了)
+            # 強制將動力降為剩餘的 30% (模擬非彈性碰撞)
+            if (old_speed > 0 and self.rotation_speed < 0) or (old_speed < 0 and self.rotation_speed > 0):
+                self.rotation_speed *= 0.3
+            
+            # # [新增] 限制最大反彈速度 (避免倒退嚕太快)
+            # if self.rotation_speed < -2.0:
+            #     self.rotation_speed = -2.0
+
+        # 摩擦力衰減 (全程使用 base_friction，因為阻力來源已經由力場模擬了)
+        self.rotation_speed *= self.base_friction
+        
+        # --- 音效觸發邏輯 ---
+        # 決定聲音模式
+        abs_speed = abs(self.rotation_speed)
+        target_mode = 'tick'
+        if abs_speed > 20: target_mode = 'fast'
+        elif abs_speed > 8: target_mode = 'medium'
+        elif abs_speed > 4: target_mode = 'slow'
+        else: target_mode = 'tick'
+            
+        # 模式切換邏輯
+        if target_mode != self.current_sound_mode:
+            self._update_sound_volumes(target_mode)
+            self.current_sound_mode = target_mode
+
+        if n > 0:
+            # 更新索引與播放滴答聲 (tick)
+            # 使用目前的指針角度判定
+            relative_angle = (270 - self.current_angle) % 360
+            current_index = int(relative_angle / slice_angle)
+            
+            if target_mode == 'tick':
+                 if current_index != self.last_sector_index:
+                    # 只要跨越格子邊界 (index 改變)，就播放音效
+                    if abs_speed > 0.1: # 避免靜止時微動一直響
+                        self._play_tick()
+                    self.last_sector_index = current_index
+            else:
+                self.last_sector_index = current_index
+
+        # [修正] 停止條件
+        # 必須同時滿足：
+        # 1. 速度極低
+        # 2. 不受顯著外力 (代表已經滑進扇區中間，不在擋板上)
+        is_stable = False
+        if n > 0:
+             # 檢查是否在穩定的中間區域 (沒受擋板力)
+             # 即 offset > peg_influence AND dist_from_end > peg_influence
+             offset = (270 - self.current_angle) % slice_angle
+             dist_from_end = 360/n - offset
+             if offset > peg_influence and dist_from_end > peg_influence:
+                 is_stable = True
+        
+        if abs(self.rotation_speed) <= 0.05 and self.is_spinning and is_stable:
+             self.rotation_speed = 0
+             self.timer.stop()
+             self.is_spinning = False
+             self._stop_all_loops()
+             
+             winner = self.items[current_index]
+             # [調整] 轉盤停下後，停頓 1 秒再彈出中獎畫面 (原本是 3秒 太久了)
+             QTimer.singleShot(1000, lambda: self._emit_finished(winner))
+        
+        self.update()
+
+    def _play_tick(self):
+         if self.tick_sounds:
+             effect = self.tick_sounds[self.tick_index]
+             if effect.isPlaying():
+                 effect.stop() 
+             effect.play()
+             self.tick_index = (self.tick_index + 1) % len(self.tick_sounds)
+
+    def _process_tick_logic_only(self):
+        # 專門給 QPropertyAnimation 使用的輕量化邏輯 (只判斷過扇區)
+        n = len(self.items)
+        if n > 0:
+            slice_angle = 360 / n
+            relative_angle = (270 - self.current_angle) % 360
+            current_index = int(relative_angle / slice_angle)
+            
+            if current_index != self.last_sector_index:
+                self._play_tick()
+                self.last_sector_index = current_index
+
+    def stop_spin(self):
+        # 將物理旋轉模式切換為「動畫著陸模式」
+        self.timer.stop()
+        self.is_spinning = False # 標記物理引擎停止
+        self._stop_all_loops()   # 停止循環音效
+        
+        # 決定中獎者 (隨機)
+        target_index = random.randint(0, len(self.items) - 1)
+        
+        # 計算目標角度 (要讓指針停在該扇區中央)
+        # 指針在 270 度 (上方)
+        # 270 - angle = (index * slice) + (slice/2)
+        # angle = 270 - (index * slice + slice/2)
+        slice_angle = 360 / len(self.items)
+        target_angle_base = 270 - (target_index * slice_angle + slice_angle / 2)
+        
+        # 為了避免看起來像 "停了又跑" (偷跑)，我們不再固定加圈數，只補足到目標角度
+        # 並使用 OutQuart 曲線，讓最後的減速更線性、沒有回彈，確保視覺上的絕對靜止
+        
+        current_mod = self.current_angle % 360
+        # 如果 target_angle_base 比 current_mod 小，要加 360 確保是未來 (順時針找最近的目標)
+        diff = target_angle_base - current_mod
+        while diff < 0: diff += 360
+        
+        # [核心修正] 動態補償邏輯
+        # 如果目標距離太近 (<150度)，會導致煞車太急；太遠則不需要補圈
+        # 加上一圈可以讓短距離變長，長距離保持原樣 (避免總距離過長導致加速)
+        if diff < 150:
+            diff += 360
+            
+        # 只轉「不足一圈」的距離，讓它最快停下
+        final_angle = self.current_angle + diff
+        
+        # 啟動動畫
+        self.anim = QPropertyAnimation(self, b"angle")
+        self.anim.setDuration(2500) # [調整] 延長煞車時間至 2.5 秒
+        self.anim.setStartValue(self.current_angle)
+        self.anim.setEndValue(final_angle)
+        self.anim.setEasingCurve(QEasingCurve.OutQuart) # 平滑減速至停止，無回彈，避免誤會
+        self.anim.finished.connect(lambda: self.on_anim_finished(target_index))
+        self.anim.start()
+
+    def on_anim_finished(self, winner_index):
+        # 確保最後角度精確
+        winner = self.items[winner_index]
+        # [新增] 停止後等待 3 秒再發送訊號 (顯示結果)
+        QTimer.singleShot(3000, lambda: self._emit_finished(winner))
+
+    def _emit_finished(self, winner):
+        self.spinFinished.emit(winner)
+        # Animation finished, clean up?
+        # self.current_angle %= 360 # Optional reset, but might jump visually if redraw happens
+
+    def _stop_all_loops(self):
+        if self.snd_fast: self.snd_fast.stop()
+        if self.snd_medium: self.snd_medium.stop()
+        if self.snd_slow: self.snd_slow.stop()
+        self.current_sound_mode = None
+
+    def determine_winner(self):
+        if not self.items: return
+        n = len(self.items)
+        slice_angle = 360 / n
+        
+        # [修正] 計算中獎索引 (修正為270度 - 角度)
+        normalized_angle = (270 - self.current_angle) % 360
+        index = int(normalized_angle / slice_angle)
+        
+        # 防止索引越界
+        index = index % n
+        
+        winner = self.items[index]
+        self.spinFinished.emit(winner)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect()
+        center = rect.center()
+        radius = min(rect.width(), rect.height()) / 2 * 0.8 
+
+        # 1. 轉盤背景光暈
+        painter.setPen(Qt.NoPen)
+        radial = QRadialGradient(center, radius * 1.1)
+        radial.setColorAt(0, QColor(255, 215, 0, 80))
+        radial.setColorAt(1, Qt.transparent)
+        painter.setBrush(radial)
+        painter.drawEllipse(center, radius * 1.1, radius * 1.1)
+
+        # 2. 扇形
+        n = len(self.items)
+        if n > 0:
+            slice_angle = 360 / n
+            painter.save()
+            try:
+                painter.translate(center)
+                painter.rotate(self.current_angle)
+
+                for i in range(n):
+                    painter.setBrush(COLORS[i % len(COLORS)])
+                    painter.setPen(QPen(Qt.white, 3))
+                    path = QPainterPath()
+                    path.moveTo(0, 0)
+                    path.arcTo(-radius, -radius, radius*2, radius*2, -i*slice_angle, -slice_angle)
+                    path.closeSubpath()
+                    painter.drawPath(path)
+                    
+                    # 文字
+                    painter.save()
+                    try:
+                        mid_angle = -i * slice_angle - slice_angle / 2
+                        painter.rotate(-mid_angle) 
+                        # [修正] 文字大小隨轉盤半徑縮放
+                        font_size = max(10, int(radius * 0.08))
+                        if n > 12: font_size = int(font_size * 0.8) # 項目多時縮小字體
+                        font = QFont("Microsoft JhengHei", font_size, QFont.Bold)
+                        painter.setFont(font)
+                        painter.setPen(Qt.white)
+                        
+                        painter.drawText(QRectF(radius*0.2, -30, radius*0.75, 60), Qt.AlignRight | Qt.AlignVCenter, self.items[i])
+                    finally:
+                        painter.restore()
+            finally:
+                painter.restore()
+        
+        # [新增] 繪製 LED 燈圈 (畫在扇形上方，避免被蓋住)
+        self.draw_leds(painter, center, radius)
+
+        # 3. 指針 (從中間往外指，指向12點鐘方向)
+        self.draw_pointer(painter, rect, radius)
+
+        # 4. 中心區域 (抽獎人頭像 或 LOGO)
+        # 如果有抽獎人頭像，優先顯示；否則顯示 LOGO
+        logo_radius = radius * 0.25
+        painter.setBrush(Qt.white)
+        painter.setPen(QPen(QColor(218, 165, 32), 5))
+        painter.drawEllipse(center, logo_radius, logo_radius)
+        
+        display_pixmap = self.presenter_pixmap if self.presenter_pixmap else self.logo_pixmap
+
+        if display_pixmap:
+            painter.save()
+            try:
+                path = QPainterPath()
+                path.addEllipse(center, logo_radius-5, logo_radius-5)
+                painter.setClipPath(path)
+                target_rect = QRectF(center.x() - logo_radius, center.y() - logo_radius, logo_radius*2, logo_radius*2)
+                painter.drawPixmap(target_rect.toRect(), display_pixmap)
+            finally:
+                painter.restore()
+        
+        if self.presenter_pixmap:
+             # 如果是抽獎人，加個文字標籤
+            painter.setBrush(QColor(0, 0, 0, 150))
+            painter.setPen(Qt.NoPen)
+            # 調整標籤位置到圓圈下方
+            label_w = 80
+            label_h = 24
+            lx = center.x() - label_w/2
+            ly = center.y() + logo_radius - 20 
+            painter.drawRoundedRect(int(lx), int(ly), int(label_w), int(label_h), 10, 10)
+            painter.setPen(Qt.white)
+            painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
+            painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
+            painter.drawText(QRectF(lx, ly, label_w, label_h), Qt.AlignCenter, "抽獎人")
+
+    def draw_leds(self, painter, center, radius):
+        # LED 參數
+        led_radius = radius * 1.12 # 稍微在光暈外
+        bulb_size = radius * 0.04  # 燈泡大小
+        
+        painter.save()
+        painter.translate(center)
+        
+        for i in range(self.led_count):
+            angle_deg = i * (360 / self.led_count)
+            angle_rad = math.radians(angle_deg)
+            
+            # 計算位置
+            lx = led_radius * math.cos(angle_rad)
+            ly = led_radius * math.sin(angle_rad)
+            
+            # 計算亮度/顏色
+            if self.is_spinning:
+                # 跑馬燈 (Chasing)
+                # 計算當前 LED 距離 "跑馬頭" (led_phase) 的距離
+                # 這裡 led_phase 是 0 ~ led_count 的浮點數
+                dist = (self.led_phase - i) % self.led_count
+                
+                # 拖尾效果: 距離越近越亮
+                # 假設尾巴長度 8 顆
+                tail_len = 8.0
+                if dist < tail_len:
+                    intensity = 1.0 - (dist / tail_len)
+                else:
+                    intensity = 0.1 # 底色微亮
+                
+                # 顏色: 旋轉時用彩色或亮黃色
+                # 這裡用 金黃色 高亮
+                alpha = int(255 * intensity)
+                # color = QColor(255, 215, 0, alpha)
+                # 讓頭部稍微白一點
+                if intensity > 0.8:
+                     color = QColor(255, 255, 200, alpha)
+                else:
+                     color = QColor(255, 165, 0, alpha)
+                     
+            else:
+                # 呼吸燈 (Breathing)
+                # 全部一起閃爍
+                # sin 範圍 -1 ~ 1 -> 0 ~ 1
+                intensity = (math.sin(self.led_phase) + 1) / 2
+                # 限制最小值，不要全暗
+                intensity = 0.3 + 0.7 * intensity
+                
+                alpha = int(255 * intensity)
+                # 呼吸時用 喜氣洋洋的紅色 或 金色? 用多色交替?
+                # 偶數紅，奇數黃
+                if i % 2 == 0:
+                    color = QColor(255, 69, 0, alpha) # 紅橙
+                else:
+                    color = QColor(255, 215, 0, alpha) # 金
+            
+            # 畫燈泡
+            
+            # 1. 燈泡光暈
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), int(alpha * 0.5)))
+            painter.drawEllipse(QRectF(lx - bulb_size*0.8, ly - bulb_size*0.8, bulb_size*1.6, bulb_size*1.6))
+            
+            # 2. 燈泡本體
+            painter.setBrush(color)
+            painter.drawEllipse(QRectF(lx - bulb_size/2, ly - bulb_size/2, bulb_size, bulb_size))
+            
+        painter.restore()
+
+    def draw_pointer(self, painter, rect, radius):
+        center_x = rect.center().x()
+        center_y = rect.center().y()
+        
+        logo_diameter = radius * 0.5
+        pointer_len = logo_diameter * 0.85
+        
+        # [修正] 指針寬度改為動態比例，避免小視窗時指針太肥 (約為半徑的 1/4)
+        pointer_w = radius * 0.25
+        
+        path = QPainterPath()
+        path.moveTo(center_x, center_y - pointer_len)
+        path.lineTo(center_x + pointer_w/2, center_y)
+        path.lineTo(center_x - pointer_w/2, center_y)
+        path.closeSubpath()
+        
+        painter.save()
+        try:
+            painter.translate(2, 2)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 100))
+            painter.drawPath(path)
+        finally:
+            painter.restore()
+
+        painter.save() # New save for the second part distinct from first
+        try:
+            painter.setPen(QPen(Qt.white, 2))
+            painter.setBrush(QColor(138, 43, 226)) 
+            painter.drawPath(path)
+        finally:
+             painter.restore()
