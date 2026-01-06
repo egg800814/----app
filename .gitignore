@@ -1,0 +1,40 @@
+.venv/               # 虛擬環境，每臺機器自己建
+.vscode/             # 可留，但裡面若有個人路徑/Token 就忽略
+.vscode/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints
+
+# 執行期才長出來的目錄
+data/                # 產生的報表、暫存、下載檔
+logs/                # 日誌
+runtime/             # 若你照先前建議改成 runtime/* 放資料
+*.log
+*.tmp
+*.bak
+*.csv
+
+# 機密
+.env
+*.key
+*.pem
+config/.env
+config/settings_local.yaml
+config/secrets.json
+
+# OS 垃圾
+.DS_Store
+Thumbs.db
+
+# 使用怎新增的資料
+config/user_params.json
