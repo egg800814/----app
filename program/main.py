@@ -5,8 +5,8 @@ import math
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QFileDialog, QMessageBox, QLineEdit, QComboBox, 
-                             QGroupBox, QFormLayout, QFrame, QInputDialog, QDesktopWidget, QSizePolicy)
-from PyQt5.QtCore import Qt, QTimer, QUrl, QSize, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal
+                             QGroupBox, QFormLayout, QFrame, QInputDialog, QDesktopWidget, QSizePolicy, QListWidget, QGraphicsOpacityEffect)
+from PyQt5.QtCore import Qt, QTimer, QUrl, QSize, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
 from PyQt5.QtGui import (QPainter, QColor, QPen, QFont, QRadialGradient, 
                          QPainterPath, QPixmap, QIcon, QImage)
 from PyQt5.QtMultimedia import QSoundEffect
@@ -23,6 +23,16 @@ COLORS = [
 
 class LuckyWheelWidget(QWidget):
     spinFinished = pyqtSignal(str)
+    
+    def get_angle(self):
+        return self.current_angle
+
+    def set_angle(self, val):
+        self.current_angle = val
+        self.update()
+        self._process_tick_logic_only() # 在動畫模式下，只處理由角度變動觸發的單音
+
+    angle = pyqtProperty(float, fget=get_angle, fset=set_angle)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,7 +40,7 @@ class LuckyWheelWidget(QWidget):
         self.current_angle = 0
         self.rotation_speed = 0
         self.is_spinning = False
-        self.friction = 0.985
+        self.friction = 0.98 # [調整] 摩擦力 (越接近1轉越久, 0.98 -> 0.99)
         
         # 音效設定
         # 音效設定 (建立音效池以支援多重發聲)
@@ -192,30 +202,108 @@ class LuckyWheelWidget(QWidget):
                  # 只要跨越格子，或者剛進入 tick 模式的第一個 frame (防止切換瞬間漏掉)
                  if current_index != self.last_sector_index:
                     if self.is_spinning and self.rotation_speed > 0:
-                         if self.tick_sounds:
-                             effect = self.tick_sounds[self.tick_index]
-                             if effect.isPlaying():
-                                 effect.stop() 
-                             effect.play()
-                             self.tick_index = (self.tick_index + 1) % len(self.tick_sounds)
+                         self._play_tick()
                     self.last_sector_index = current_index
             else:
                 # 在 Loop 模式下只更新索引但不播單音
                 self.last_sector_index = current_index
 
-        if self.rotation_speed < 0.1:
-            self.stop_spin()
+        # [修改] 暫時停用電腦接手 (Handover)，改為純物理停止
+        # if self.rotation_speed < 5.0:
+        #    # [調整] 提高接手門檻 (0.5 -> 2.0)，確保有足夠動能進入動畫，不會突然加速
+        #    self.stop_spin()
+            
+        # [新增] 純物理停止判斷
+        if self.rotation_speed <= 0.05 and self.is_spinning:
+            self.rotation_speed = 0
+            self.timer.stop()
+            self.is_spinning = False
+            self._stop_all_loops()
+            
+            # 計算中獎者 (根據最終角度)
+            if n > 0:
+                slice_angle = 360 / n
+                relative_angle = (270 - self.current_angle) % 360
+                winner_index = int(relative_angle / slice_angle)
+                winner = self.items[winner_index]
+                
+                # 3秒後公布結果
+                QTimer.singleShot(3000, lambda: self._emit_finished(winner))
         
         self.update()
 
+    def _play_tick(self):
+         if self.tick_sounds:
+             effect = self.tick_sounds[self.tick_index]
+             if effect.isPlaying():
+                 effect.stop() 
+             effect.play()
+             self.tick_index = (self.tick_index + 1) % len(self.tick_sounds)
+
+    def _process_tick_logic_only(self):
+        # 專門給 QPropertyAnimation 使用的輕量化邏輯 (只判斷過扇區)
+        n = len(self.items)
+        if n > 0:
+            slice_angle = 360 / n
+            relative_angle = (270 - self.current_angle) % 360
+            current_index = int(relative_angle / slice_angle)
+            
+            if current_index != self.last_sector_index:
+                self._play_tick()
+                self.last_sector_index = current_index
+
     def stop_spin(self):
+        # 將物理旋轉模式切換為「動畫著陸模式」
         self.timer.stop()
-        self.is_spinning = False
-        self.rotation_speed = 0
-        # 延遲 300 毫秒後才公布中獎結果，增加張力
-        # 延遲 300 毫秒後才公布中獎結果，增加張力
-        self._stop_all_loops()
-        QTimer.singleShot(1000, self.determine_winner)
+        self.is_spinning = False # 標記物理引擎停止
+        self._stop_all_loops()   # 停止循環音效
+        
+        # 決定中獎者 (隨機)
+        target_index = random.randint(0, len(self.items) - 1)
+        
+        # 計算目標角度 (要讓指針停在該扇區中央)
+        # 指針在 270 度 (上方)
+        # 270 - angle = (index * slice) + (slice/2)
+        # angle = 270 - (index * slice + slice/2)
+        slice_angle = 360 / len(self.items)
+        target_angle_base = 270 - (target_index * slice_angle + slice_angle / 2)
+        
+        # 為了避免看起來像 "停了又跑" (偷跑)，我們不再固定加圈數，只補足到目標角度
+        # 並使用 OutQuart 曲線，讓最後的減速更線性、沒有回彈，確保視覺上的絕對靜止
+        
+        current_mod = self.current_angle % 360
+        # 如果 target_angle_base 比 current_mod 小，要加 360 確保是未來 (順時針找最近的目標)
+        diff = target_angle_base - current_mod
+        while diff < 0: diff += 360
+        
+        # [核心修正] 動態補償邏輯
+        # 如果目標距離太近 (<150度)，會導致煞車太急；太遠則不需要補圈
+        # 加上一圈可以讓短距離變長，長距離保持原樣 (避免總距離過長導致加速)
+        if diff < 150:
+            diff += 360
+            
+        # 只轉「不足一圈」的距離，讓它最快停下
+        final_angle = self.current_angle + diff
+        
+        # 啟動動畫
+        self.anim = QPropertyAnimation(self, b"angle")
+        self.anim.setDuration(2500) # [調整] 延長煞車時間至 2.5 秒
+        self.anim.setStartValue(self.current_angle)
+        self.anim.setEndValue(final_angle)
+        self.anim.setEasingCurve(QEasingCurve.OutQuart) # 平滑減速至停止，無回彈，避免誤會
+        self.anim.finished.connect(lambda: self.on_anim_finished(target_index))
+        self.anim.start()
+
+    def on_anim_finished(self, winner_index):
+        # 確保最後角度精確
+        winner = self.items[winner_index]
+        # [新增] 停止後等待 3 秒再發送訊號 (顯示結果)
+        QTimer.singleShot(3000, lambda: self._emit_finished(winner))
+
+    def _emit_finished(self, winner):
+        self.spinFinished.emit(winner)
+        # Animation finished, clean up?
+        # self.current_angle %= 360 # Optional reset, but might jump visually if redraw happens
 
     def _stop_all_loops(self):
         if self.snd_fast: self.snd_fast.stop()
@@ -434,34 +522,89 @@ class LuckyWheelWidget(QWidget):
              painter.restore()
 
 
+class ConfettiWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.particles = []
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_particles)
+        self.is_active = False
+
+    def start(self):
+        self.is_active = True
+        self.particles = []
+        for _ in range(100):
+            self.particles.append(self._create_particle())
+        self.timer.start(20)
+        self.show()
+        self.raise_()
+
+    def stop(self):
+        self.is_active = False
+        self.timer.stop()
+        self.hide()
+
+    def _create_particle(self):
+        return {
+            'x': random.randint(0, self.width()),
+            'y': random.randint(-self.height(), 0),
+            'speed': random.randint(5, 15),
+            'size': random.randint(5, 10),
+            'color': random.choice(COLORS),
+            'drift': random.uniform(-2, 2)
+        }
+
+    def update_particles(self):
+        if not self.is_active: return
+        for p in self.particles:
+            p['y'] += p['speed']
+            p['x'] += p['drift']
+            if p['y'] > self.height():
+                # Reset to top
+                p['y'] = random.randint(-50, 0)
+                p['x'] = random.randint(0, self.width())
+        self.update()
+
+    def paintEvent(self, event):
+        if not self.is_active: return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        for p in self.particles:
+            painter.setBrush(p['color'])
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(int(p['x']), int(p['y']), p['size'], p['size'])
+
+
 class WinnerOverlay(QWidget):
     """大螢幕的中獎顯示遮罩"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True) # 讓點擊穿透 (如果需要)
-        self.hide()
-        
-        # 半透明背景
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 200);")
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 0.85);")
         
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         
-        self.msg_label = QLabel()
-        self.msg_label.setAlignment(Qt.AlignCenter)
-        self.msg_label.setStyleSheet("""
-            QLabel {
-                color: #f1c40f;
-                font-size: 80px;
-                font-weight: bold;
-                font-family: "Microsoft JhengHei";
-            }
-        """)
-        layout.addWidget(self.msg_label)
+        self.title_label = QLabel("🎉 恭喜中獎 🎉")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet("color: #e74c3c; font-size: 80px; font-weight: bold; margin-bottom: 20px;")
         
-    def show_winner(self, winner_name, prize_name):
-        text = f"恭喜\n\n【{winner_name}】\n\n獲得\n\n🎁 {prize_name} 🎁"
-        self.msg_label.setText(text)
+        self.prize_label = QLabel("")
+        self.prize_label.setAlignment(Qt.AlignCenter)
+        self.prize_label.setStyleSheet("color: #ffffff; font-size: 50px; font-weight: bold; margin-bottom: 10px;")
+
+        self.name_label = QLabel("")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setStyleSheet("color: #f1c40f; font-size: 120px; font-weight: bold;")
+        
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.prize_label)
+        layout.addWidget(self.name_label)
+
+    def show_winner(self, name, prize):
+        self.prize_label.setText(f"🎁 {prize} 🎁")
+        self.name_label.setText(name)
         self.show()
         self.raise_()
         
@@ -473,7 +616,6 @@ class WinnerOverlay(QWidget):
         self.opacity.start()
 
     def paintEvent(self, event):
-        # 繪製半透明背景，因 setStyleSheet 在某些情況下對全螢幕視窗可能無效
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 200))
 
@@ -481,8 +623,8 @@ class WinnerOverlay(QWidget):
 class DisplayWindow(QWidget):
     """
     大螢幕視窗 (觀眾視角)
-    - 只有轉盤 + 開始標籤
-    - 顯示中獎動畫
+    - 轉盤(左) + 得獎名單(右)
+    - 兩段式揭曉與動態特效
     """
     requestSpin = pyqtSignal()
     
@@ -490,73 +632,133 @@ class DisplayWindow(QWidget):
         super().__init__()
         self.setWindowTitle("大螢幕抽獎")
         
-        # Initialize overlay FIRST so it exists for any subsequent resize events
+        # Overlay and Confetti (Initialize early)
         self.overlay = WinnerOverlay(self)
-        
+        self.confetti = ConfettiWidget(self)
+        self.overlay.hide()
+        self.confetti.hide()
+
         # 全螢幕設定
         self.showFullScreen()
         
         if os.path.exists("background_display.jpg"):
              self.setStyleSheet(f"DisplayWindow {{ border-image: url(background_display.jpg) 0 0 0 0 stretch stretch; }}")
         else:
-             self.setStyleSheet("background-color: #111;")
+             self.setStyleSheet("background-color: #2c3e50;")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(50, 50, 50, 50)
-
+        # Main Layout (Horizontal)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # --- LEFT SIDE: Wheel & Title ---
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        
         # 頂部：目前抽獎項目標題
         self.prize_label = QLabel("🎉 MDIT 尾牙抽獎活動準備中 🎉")
         self.prize_label.setAlignment(Qt.AlignCenter)
         self.prize_label.setStyleSheet("""
             QLabel {
                 color: #f1c40f;
-                font-size: 60px;
+                font-size: 50px;
                 font-weight: bold;
                 font-family: "Microsoft JhengHei";
                 margin-bottom: 20px;
             }
         """)
-        layout.addWidget(self.prize_label)
         
-        # 轉盤部分
+        # 轉盤
         self.wheel = LuckyWheelWidget()
-        layout.addWidget(self.wheel, 1) # 佔據大部分空間
         
-        # 開始按鈕
+        # 開始按鈕 (保留，但現在主要由後台控制)
         self.spin_btn = QPushButton("開始抽獎")
-        self.spin_btn.setFixedSize(300, 100)
+        self.spin_btn.setFixedSize(200, 80)
         self.spin_btn.setCursor(Qt.PointingHandCursor)
         self.spin_btn.setStyleSheet("""
             QPushButton {
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e74c3c, stop:1 #c0392b);
-                color: white;
-                font-size: 40px;
-                border-radius: 50px;
-                border: 4px solid #fff;
-                font-weight: bold;
-                font-family: "Microsoft JhengHei";
+                color: white; font-size: 30px; border-radius: 40px; border: 3px solid #fff; font-weight: bold;
             }
-            QPushButton:hover {
-                background-color: #ff6b6b;
-            }
-            QPushButton:pressed {
-                background-color: #a93226;
-            }
+            QPushButton:hover { background-color: #ff6b6b; }
+            QPushButton:pressed { background-color: #a93226; }
         """)
+        self.spin_btn.clicked.connect(self.requestSpin.emit)
         
-        # 讓按鈕置中
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         btn_layout.addWidget(self.spin_btn)
         btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+
+        left_layout.addWidget(self.prize_label)
+        left_layout.addWidget(self.wheel, 1)
+        left_layout.addLayout(btn_layout)
         
-        self.spin_btn.clicked.connect(self.requestSpin.emit)
+        # --- RIGHT SIDE: Winner List ---
+        self.right_container = QWidget()
+        self.right_container.setFixedWidth(350)
+        self.right_container.setStyleSheet("""
+            QWidget {
+                background-color: rgba(0, 0, 0, 0.4); 
+                border-left: 3px solid rgba(255, 215, 0, 0.5);
+                border-radius: 15px;
+            }
+        """)
+        right_layout = QVBoxLayout(self.right_container)
         
+        lbl_list_title = QLabel("🏆 榮譽榜")
+        lbl_list_title.setAlignment(Qt.AlignCenter)
+        lbl_list_title.setStyleSheet("color: #f1c40f; font-size: 32px; font-weight: bold; padding: 10px; background: transparent; border: none;")
+        
+        self.winner_list = QListWidget()
+        self.winner_list.setFocusPolicy(Qt.NoFocus)
+        self.winner_list.setStyleSheet("""
+            QListWidget {
+                background-color: transparent;
+                border: none;
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+                font-family: "Microsoft JhengHei";
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 15px;
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+                color: #ecf0f1;
+            }
+            QListWidget::item:selected {
+                background: transparent;
+                color: #f1c40f;
+            }
+        """)
+        
+        right_layout.addWidget(lbl_list_title)
+        right_layout.addWidget(self.winner_list)
+        
+        # Add to main layout
+        main_layout.addWidget(left_container, 7)
+        main_layout.addWidget(self.right_container, 3)
+
+    def set_focus_mode(self, active):
+        """專注模式：轉動時將右側名單變暗"""
+        op = QGraphicsOpacityEffect(self.right_container)
+        op.setOpacity(0.2 if active else 1.0) # 轉動時變很暗 (0.2)
+        self.right_container.setGraphicsEffect(op)
     
+    def add_winner(self, name):
+        prize = self.prize_label.text().replace("🎉", "").strip()
+        if "準備中" in prize: prize = "特別獎"
+        
+        # Format: [Prize] Name
+        item_text = f"【{prize}】\n   {name}"
+        self.winner_list.addItem(item_text)
+        self.winner_list.scrollToBottom()
+
     def resizeEvent(self, event):
         if hasattr(self, 'overlay'):
             self.overlay.resize(self.size())
+        if hasattr(self, 'confetti'):
+            self.confetti.resize(self.size())
         super().resizeEvent(event)
 
     def update_prize_name(self, prize_name):
@@ -941,50 +1143,70 @@ class MainWindow(QMainWindow):
         # 產生同步的速度參數
         speed = random.uniform(25, 40)
         
-        # self.preview_wheel.start_spin(speed) # [修改] 系統端轉盤不跟著轉
-        self.display_window.wheel.start_spin(speed)
-        self.display_window.spin_btn.setEnabled(False) # 暫時禁用
+        self.display_window.set_focus_mode(True)
+        # 2. 開始轉動
+        self.display_window.wheel.start_spin()
+        
+        # 3. UI 狀態
+        self.display_window.spin_btn.setEnabled(False)
         self.sys_spin_btn.setEnabled(False)
 
     def on_spin_finished(self, winner_name):
-        """當轉盤停止時，由 ControlWindow 處理邏輯"""
-        # if self.win_sound.status() != QSoundEffect.Error:
-        #    self.win_sound.play()
-        
+        """當轉盤動畫完全停止時觸發"""
         current_prize = self.prize_combo.currentText()
         
-        # 1. 大螢幕顯示結果 (純展示)
-        self.display_window.show_winner_message(winner_name, current_prize)
+        # 1. 大螢幕顯示彈窗 (Overlay) (使用 DisplayWindow 內的 overlay 物件)
+        if hasattr(self.display_window, 'overlay'):
+            self.display_window.overlay.show_winner(winner_name, current_prize)
         
-        # 2. 系統端跳出決策視窗
+        # [修改] 中獎音樂提前至此處播放
+        if hasattr(self, 'win_sound') and self.win_sound.source().isValid():
+            self.win_sound.play()
+
+        # 2. 系統端跳出確認視窗 (Action)
         msg = QMessageBox(self)
-        msg.setWindowTitle("🎉 抽獎結果確認")
-        msg.setText(f"結果：{winner_name}\n獎項：{current_prize}\n\n請問是否確認此結果？")
-        msg.setIcon(QMessageBox.NoIcon)
-        
-        confirm_btn = msg.addButton("確認 (移除名單)", QMessageBox.YesRole)
-        keep_btn = msg.addButton("保留名單 (測試/重抽)", QMessageBox.NoRole)
-        
+        msg.setWindowTitle("中獎確認")
+        msg.setText(f"獎項：{current_prize}\n中獎者：{winner_name}\n\n請確認是否歸檔？")
+        btn_confirm = msg.addButton("確認 (Confirm)", QMessageBox.YesRole)
+        btn_cancel = msg.addButton("保留 (Cancel)", QMessageBox.NoRole)
+        msg.setIcon(QMessageBox.Question)
         msg.exec_()
         
-        if msg.clickedButton() == confirm_btn:
-            # 確認中獎：移除名單
-            items = self.list_edit.toPlainText().split('\n')
-            items = [x.strip() for x in items if x.strip() != winner_name]
-            self.list_edit.setPlainText("\n".join(items))
-            self.update_preview_list()
-            
-            msg_ok = QMessageBox(self)
-            msg_ok.setWindowTitle("完成")
-            msg_ok.setText(f"已將 {winner_name} 從轉盤移除。")
-            msg_ok.setIcon(QMessageBox.NoIcon)
-            msg_ok.exec_()
+        if msg.clickedButton() == btn_confirm:
+            self.confirm_winner(winner_name)
         else:
-            # 保留名單：什麼都不做，或者視為重抽
-            pass
-            
-        # 3. 恢復系統端操作，但大螢幕保持中獎畫面直到「發布」
+            # Cancel: 隱藏 Overlay，重置狀態，但不移除名單
+            self.display_window.overlay.hide()
+            self.display_window.set_focus_mode(False)
+            self.sys_spin_btn.setEnabled(True)
+            self.display_window.spin_btn.setEnabled(True)
+
+    def confirm_winner(self, winner_name):
+        # 1. 啟動彩帶 (音效已提前播放)
+        
+        self.display_window.overlay.hide()
+        self.display_window.confetti.start()
+        
+        # 3秒後停止彩帶
+        QTimer.singleShot(3000, self.display_window.confetti.stop)
+        
+        # 2. 顯示在右側得獎名單
+        self.display_window.add_winner(winner_name)
+        
+        # 3. 從轉盤名單移除
+        current_text = self.list_edit.toPlainText()
+        lines = [line.strip() for line in current_text.split('\n') if line.strip()]
+        
+        if winner_name in lines:
+            lines.remove(winner_name)
+            self.list_edit.setPlainText("\n".join(lines))
+            self.display_window.wheel.set_items(lines)
+            self.update_preview_list() # 更新預覽
+        
+        # 4. 恢復一般模式
+        self.display_window.set_focus_mode(False)
         self.sys_spin_btn.setEnabled(True)
+        self.display_window.spin_btn.setEnabled(True)
 
 if __name__ == '__main__':
     from PyQt5.QtCore import QCoreApplication
