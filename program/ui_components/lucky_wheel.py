@@ -434,6 +434,10 @@ class LuckyWheelWidget(QWidget):
         # [新增] 繪製 LED 燈圈 (畫在扇形上方，避免被蓋住)
         self.draw_leds(painter, center, radius)
 
+        # [新增] 速度線特效 (當速度夠快時)
+        if abs(self.rotation_speed) > 20:
+             self.draw_speed_lines(painter, center, radius)
+
         # 3. 指針 (從中間往外指，指向12點鐘方向)
         self.draw_pointer(painter, rect, radius)
 
@@ -574,3 +578,71 @@ class LuckyWheelWidget(QWidget):
             painter.drawPath(path)
         finally:
              painter.restore()
+
+    def draw_speed_lines(self, painter, center, radius):
+        """繪製速度線特效 (白色半透明放射狀線條)"""
+        # 使用隨機與時間因子產生動態感
+        # 這裡不重度依賴 random 以免閃爍太嚴重，可以用 current_angle 當作種子
+        
+        painter.save()
+        painter.translate(center)
+        
+        # 不需要跟隨轉盤旋轉 (這是一種視覺殘留特效)
+        # 但給一點偏移讓它看起來不是死的
+        import time
+        t = time.time() * 10 
+        
+        count = 12 # 線條數量
+        
+        for i in range(count):
+            painter.save()
+            
+            # 角度分佈均勻但帶有一些隨機偏移
+            base_angle = i * (360 / count)
+            # 隨機偏移 (-15 ~ +15 度)
+            # 使用偽隨機，讓它在每幀變化
+            offset = (math.sin(t + i) * 20) 
+            angle = base_angle + offset
+            
+            painter.rotate(angle)
+            
+            # 繪製長條三角形
+            # 從外圈向內指
+            # Y軸負方向是上方
+            
+            # 隨機長度與寬度
+            length_factor = 0.3 + (math.cos(t * 2 + i) * 0.1) # 20% ~ 40% 半徑長
+            width_factor = 3 + (math.sin(t * 3 + i) * 2)      # 1 ~ 5 px 寬
+            
+            # 透明度
+            alpha = int(100 + math.sin(t + i*2) * 80) # 20 ~ 180
+            alpha = max(0, min(255, alpha))
+            
+            color = QColor(255, 255, 255, alpha)
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+            
+            path = QPainterPath()
+            # 三角形尖端朝圓心 (半徑 * (1-length)) 位置
+            inner_r = radius * (1.0 - length_factor)
+            outer_r = radius * 1.05 # 稍微超出轉盤
+            
+            # 這裡我們畫一個細長的梯形/三角形
+            # y 軸向上 (painter 預設是 y 向下，但我們 rotate 了)
+            # 其實不用太複雜，就畫一個三角形
+            # p1: (0, -outer_r)
+            # p2: (-w, -outer_r)
+            # p3: (0, -inner_r)
+            # p4: (w, -outer_r)
+            
+            path.moveTo(0, -inner_r)
+            path.lineTo(-width_factor, -outer_r)
+            path.lineTo(width_factor, -outer_r)
+            path.closeSubpath()
+            
+            painter.drawPath(path)
+            
+            painter.restore()
+            
+        painter.restore()
+
