@@ -3,7 +3,7 @@ import random
 import math
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap, QBrush, QLinearGradient
 from PyQt5.QtMultimedia import QSoundEffect
 from utils.config import COLORS
 
@@ -427,28 +427,54 @@ class LuckyWheelWidget(QWidget):
                 painter.translate(center)
                 painter.rotate(self.current_angle)
 
+                # Loop 1: 繪製扇形 (背景)
                 for i in range(n):
-                    painter.setBrush(COLORS[i % len(COLORS)])
+                    painter.save()
+                    painter.rotate(-i * slice_angle)
+                    
+                    base_c = COLORS[i % len(COLORS)]
+                    
+                    # 建立線性漸層 (從圓心往外)
+                    grad = QLinearGradient(0, 0, radius, 0)
+                    grad.setColorAt(0.0, base_c.darker(130))
+                    grad.setColorAt(0.5, base_c.lighter(140))
+                    grad.setColorAt(1.0, base_c.darker(130))
+                    
+                    painter.setBrush(QBrush(grad))
                     painter.setPen(QPen(Qt.white, 3))
+                    
                     path = QPainterPath()
                     path.moveTo(0, 0)
-                    path.arcTo(-radius, -radius, radius*2, radius*2, -i*slice_angle, -slice_angle)
+                    path.arcTo(-radius, -radius, radius*2, radius*2, 0, -slice_angle)
                     path.closeSubpath()
                     painter.drawPath(path)
-                    
-                    # 文字
+                    painter.restore()
+
+                # Loop 2: 繪製文字 (確保文字永遠在扇形上方，且清晰可見)
+                for i in range(n):
                     painter.save()
                     try:
+                        # 計算文字角度 (每個扇區的中間線)
                         mid_angle = -i * slice_angle - slice_angle / 2
                         painter.rotate(-mid_angle) 
-                        # [修正] 文字大小隨轉盤半徑縮放
+                        
                         font_size = max(10, int(radius * 0.08))
-                        if n > 12: font_size = int(font_size * 0.8) # 項目多時縮小字體
+                        if n > 12: font_size = int(font_size * 0.8)
                         font = QFont("Microsoft JhengHei", font_size, QFont.Bold)
                         painter.setFont(font)
-                        painter.setPen(Qt.white)
                         
-                        painter.drawText(QRectF(radius*0.2, -30, radius*0.75, 60), Qt.AlignRight | Qt.AlignVCenter, self.items[i])
+                        text_rect = QRectF(radius*0.2, -30, radius*0.75, 60)
+                        text_str = self.items[i]
+                        
+                        # [新增] 文字陰影 (Drop Shadow) - 解決金色背景吃字問題
+                        painter.setPen(QColor(0, 0, 0, 120)) # 半透明黑
+                        # 稍微偏移畫一次黑色的
+                        painter.drawText(text_rect.translated(2, 2), Qt.AlignRight | Qt.AlignVCenter, text_str)
+                        
+                        # 畫白色正文
+                        painter.setPen(Qt.white)
+                        painter.drawText(text_rect, Qt.AlignRight | Qt.AlignVCenter, text_str)
+
                     finally:
                         painter.restore()
             finally:
