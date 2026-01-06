@@ -41,7 +41,7 @@ class LuckyWheelWidget(QWidget):
         self.rotation_speed = 0
         self.is_spinning = False
         self.base_friction = 0.99 # 一般滑行摩擦力 (阻力小)
-        self.peg_friction = 0.95  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
+        self.peg_friction = 0.85  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
         self.friction = self.base_friction # 當前摩擦力
         
         # 音效設定
@@ -172,83 +172,130 @@ class LuckyWheelWidget(QWidget):
     def update_spin(self):
         self.current_angle += self.rotation_speed
         self.current_angle %= 360
-        
-        # [新增] 擋板物理模擬
+
+        # [新增] 真實物理場模擬 (Potential Energy Field)
+        # 將擋板視為高能量區，指針在中間是低能量區
+        # 當指針靠近擋板(扇區邊緣)時，會受到一個「排斥力/推力」使其離開擋板
         n = len(self.items)
         if n > 0:
             slice_angle = 360 / n
-            # 計算指針(270度)相對於當前扇區起始邊的偏移角度
-            # (270 - current_angle) 是指針在盤面上的相對角度
-            # 對 slice_angle 取餘數，得到指針在該扇區內的「進度」 (0 ~ slice_angle)
             offset = (270 - self.current_angle) % slice_angle
             
-            # 定義擋板範圍：扇區交界處前後 2 度
-            # 如果 offset 很小 (剛進入) 或 offset 很大 (快離開)，代表撞到擋板
-            peg_width = 2.0
-            if offset < peg_width or offset > (slice_angle - peg_width):
-                self.friction = self.peg_friction # 撞擊擋板，阻力變大
-            else:
-                self.friction = self.base_friction # 扇區中間，阻力恢復
-        
-        self.rotation_speed *= self.friction
+            # 參數設定
+            peg_influence = 0.5  # [修正] 縮小影響範圍 (只在交界處 1 度內)
+            force_strength = 0.24 # 原本的力道
+            
+            total_force = 0
+            
+            # [修正] 物理邏輯：前進時給予強大阻力 (撞擊)，後退時給予極小推力 (滑落)
+            # 避免像彈簧一樣劇烈反彈
+            # [修正] 全對稱擋板物理邏輯
+            # 無論正轉或反轉，撞到擋板都會受到相同的物理阻力
+            
+            # 1. 檢測與"下一個擋板" (扇區終點) 的碰撞 -> 產生負向推力 (阻擋正轉)
+            dist_from_end = slice_angle - offset
+            if dist_from_end < peg_influence:
+                factor = (peg_influence - dist_from_end) / peg_influence
+                total_force -= force_strength * factor 
+
+            # 2. 檢測與"上一個擋板" (扇區起點) 的碰撞 -> 產生正向推力 (阻擋反轉)
+            if offset < peg_influence:
+                factor = (peg_influence - offset) / peg_influence
+                total_force += force_strength * factor 
+            
+            # 儲存舊速度以偵測碰撞反彈
+            old_speed = self.rotation_speed
+            
+            # [修正] 避免反彈後持續被力場加速
+            # 如果力場方向與速度方向相同 (代表正在被推著跑/反彈加速中)
+            # 大幅削減這個推力，讓它變成 "滑落" 而非 "加速"
+            if (total_force * self.rotation_speed) > 0:
+                total_force *= 0.05 # [強制修正] 用戶之前改回0.6導致搖擺，這裡強制改回0.05以消除搖擺
+            
+            self.rotation_speed += total_force
+
+            # [新增] 磁力歸中機制 (Center Magnet)
+            # 當速度慢下來時，施加一個微小的力，將指針拉向扇區的正中央
+            # 這能保證轉盤永遠不會停在交界處 (解決"無法判定中獎"的問題)
+            if abs(self.rotation_speed) < 5.0:
+                center_offset = slice_angle / 2
+                dist_to_center = center_offset - offset
+                # 磁力係數，越靠近中心吸力越小
+                magnet_force = dist_to_center * 0.03 
+                self.rotation_speed += magnet_force
+            
+            # [新增] 只有在 "離開擋板" (回彈滑落) 的時候，施加超重摩擦力
+            is_rebounding_next = (dist_from_end < peg_influence and self.rotation_speed < 0)
+            is_rebounding_prev = (offset < peg_influence and self.rotation_speed > 0)
+            
+            if is_rebounding_next or is_rebounding_prev:
+                self.rotation_speed *= 0.85 # 強力阻尼
+                
+            # [核心修正] 動能耗損邏輯
+            
+            # [核心修正] 動能耗損邏輯
+            # 當速度方向改變 (例如正轉變反轉，代表撞到擋板彈回來了)
+            # 強制將動力降為剩餘的 30% (模擬非彈性碰撞)
+            if (old_speed > 0 and self.rotation_speed < 0) or (old_speed < 0 and self.rotation_speed > 0):
+                self.rotation_speed *= 0.3
+            
+            # # [新增] 限制最大反彈速度 (避免倒退嚕太快)
+            # if self.rotation_speed < -2.0:
+            #     self.rotation_speed = -2.0
+
+        # 摩擦力衰減 (全程使用 base_friction，因為阻力來源已經由力場模擬了)
+        self.rotation_speed *= self.base_friction
         
         # --- 音效觸發邏輯 ---
         # 決定聲音模式
+        abs_speed = abs(self.rotation_speed)
         target_mode = 'tick'
-        if self.rotation_speed > 20:
-            target_mode = 'fast'
-        elif self.rotation_speed > 8:
-            target_mode = 'medium'
-        elif self.rotation_speed > 4: # [調整] 提高門檻，讓最後單音的階段更長一點 (4以下的都算單音)
-            target_mode = 'slow'
-        else:
-            target_mode = 'tick'
+        if abs_speed > 20: target_mode = 'fast'
+        elif abs_speed > 8: target_mode = 'medium'
+        elif abs_speed > 4: target_mode = 'slow'
+        else: target_mode = 'tick'
             
         # 模式切換邏輯
-        # 模式切換邏輯 (改用音量控制，不在此處 stop/play 避免 lag)
         if target_mode != self.current_sound_mode:
             self._update_sound_volumes(target_mode)
             self.current_sound_mode = target_mode
 
-        n = len(self.items)
         if n > 0:
-            slice_angle = 360 / n
+            # 更新索引與播放滴答聲 (tick)
+            # 使用目前的指針角度判定
             relative_angle = (270 - self.current_angle) % 360
             current_index = int(relative_angle / slice_angle)
             
-            # [修正] 絕對索引變更偵測
-            # 只有在 'tick' 模式下才使用原本的單音觸發
             if target_mode == 'tick':
-                 # 只要跨越格子，或者剛進入 tick 模式的第一個 frame (防止切換瞬間漏掉)
                  if current_index != self.last_sector_index:
-                    if self.is_spinning and self.rotation_speed > 0:
-                         self._play_tick()
+                    # 只要跨越格子邊界 (index 改變)，就播放音效
+                    if abs_speed > 0.1: # 避免靜止時微動一直響
+                        self._play_tick()
                     self.last_sector_index = current_index
             else:
-                # 在 Loop 模式下只更新索引但不播單音
                 self.last_sector_index = current_index
 
-        # [修改] 暫時停用電腦接手 (Handover)，改為純物理停止
-        # if self.rotation_speed < 5.0:
-        #    # [調整] 提高接手門檻 (0.5 -> 2.0)，確保有足夠動能進入動畫，不會突然加速
-        #    self.stop_spin()
-            
-        # [新增] 純物理停止判斷
-        if self.rotation_speed <= 0.05 and self.is_spinning:
-            self.rotation_speed = 0
-            self.timer.stop()
-            self.is_spinning = False
-            self._stop_all_loops()
-            
-            # 計算中獎者 (根據最終角度)
-            if n > 0:
-                slice_angle = 360 / n
-                relative_angle = (270 - self.current_angle) % 360
-                winner_index = int(relative_angle / slice_angle)
-                winner = self.items[winner_index]
-                
-                # 3秒後公布結果
-                QTimer.singleShot(3000, lambda: self._emit_finished(winner))
+        # [修正] 停止條件
+        # 必須同時滿足：
+        # 1. 速度極低
+        # 2. 不受顯著外力 (代表已經滑進扇區中間，不在擋板上)
+        is_stable = False
+        if n > 0:
+             # 檢查是否在穩定的中間區域 (沒受擋板力)
+             # 即 offset > peg_influence AND dist_from_end > peg_influence
+             offset = (270 - self.current_angle) % slice_angle
+             dist_from_end = 360/n - offset
+             if offset > peg_influence and dist_from_end > peg_influence:
+                 is_stable = True
+        
+        if abs(self.rotation_speed) <= 0.05 and self.is_spinning and is_stable:
+             self.rotation_speed = 0
+             self.timer.stop()
+             self.is_spinning = False
+             self._stop_all_loops()
+             
+             winner = self.items[current_index]
+             QTimer.singleShot(3000, lambda: self._emit_finished(winner))
         
         self.update()
 
@@ -1001,6 +1048,18 @@ class MainWindow(QMainWindow):
         """)
         self.sys_spin_btn.clicked.connect(self.master_start_spin)
         
+        # [新增] 測試按鈕 (慢速轉動，測試物理)
+        self.test_spin_btn = QPushButton("🧪 測試轉動 (1/10 Speed)")
+        self.test_spin_btn.setMinimumHeight(40)
+        self.test_spin_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #555;
+                color: white; font-size: 18px; border-radius: 8px; border: 1px solid #aaa;
+            }
+            QPushButton:hover { background-color: #777; }
+        """)
+        self.test_spin_btn.clicked.connect(self.test_start_spin)
+        
         # [新增] 右下角即時監控
         kp_layout = QHBoxLayout()
         kp_layout.addStretch()
@@ -1027,6 +1086,7 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.preview_label)
         preview_layout.addWidget(wheel_container, 1)
         preview_layout.addWidget(self.sys_spin_btn)
+        preview_layout.addWidget(self.test_spin_btn) # 加入測試按鈕
         preview_layout.addLayout(kp_layout) # 放到最下方
         
         layout.addWidget(control_panel, 1)
@@ -1169,7 +1229,25 @@ class MainWindow(QMainWindow):
         
         # 3. UI 狀態
         self.display_window.spin_btn.setEnabled(False)
+        # 3. UI 狀態
+        self.display_window.spin_btn.setEnabled(False)
         self.sys_spin_btn.setEnabled(False)
+        self.test_spin_btn.setEnabled(False)
+
+    def test_start_spin(self):
+        """測試模式：低速啟動 (1/10 速度)"""
+        if self.display_window.wheel.is_spinning:
+            return
+
+        # 產生低速參數 (2.5 ~ 4.0)
+        speed = random.uniform(1.0, 2.0)
+        
+        self.display_window.set_focus_mode(True)
+        self.display_window.wheel.start_spin(initial_speed=speed)
+        
+        self.display_window.spin_btn.setEnabled(False)
+        self.sys_spin_btn.setEnabled(False)
+        self.test_spin_btn.setEnabled(False)
 
     def on_spin_finished(self, winner_name):
         """當轉盤動畫完全停止時觸發"""
@@ -1199,7 +1277,10 @@ class MainWindow(QMainWindow):
             self.display_window.overlay.hide()
             self.display_window.set_focus_mode(False)
             self.sys_spin_btn.setEnabled(True)
+            self.display_window.set_focus_mode(False)
+            self.sys_spin_btn.setEnabled(True)
             self.display_window.spin_btn.setEnabled(True)
+            self.test_spin_btn.setEnabled(True)
 
     def confirm_winner(self, winner_name):
         # 1. 啟動彩帶 (音效已提前播放)
