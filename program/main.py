@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QFileDialog, QMessageBox, QLineEdit, QComboBox, 
                              QGroupBox, QFormLayout, QFrame, QInputDialog, QDesktopWidget, QSizePolicy, QListWidget, QGraphicsOpacityEffect)
-from PyQt5.QtCore import Qt, QTimer, QUrl, QSize, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
+from PyQt5.QtCore import Qt, QTimer, QUrl, QSize, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint, QVariantAnimation
 from PyQt5.QtGui import (QPainter, QColor, QPen, QFont, QRadialGradient, 
                          QPainterPath, QPixmap, QIcon, QImage)
 from PyQt5.QtMultimedia import QSoundEffect
@@ -644,6 +644,23 @@ class ConfettiWidget(QWidget):
             painter.drawEllipse(int(p['x']), int(p['y']), p['size'], p['size'])
 
 
+
+class FlyingLabel(QLabel):
+    """飛行動畫用的臨時標籤"""
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet("color: gold; font-weight: bold; font-size: 40px; background: transparent;")
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.adjustSize()
+        self.show()
+
+    def set_scale(self, scale):
+        # 簡單模擬縮放 (調整字體大小)
+        font = self.font()
+        font.setPointSizeF(40 * scale)
+        self.setFont(font)
+        self.adjustSize()
+
 class WinnerOverlay(QWidget):
     """大螢幕的中獎顯示遮罩"""
     def __init__(self, parent=None):
@@ -675,12 +692,26 @@ class WinnerOverlay(QWidget):
         self.show()
         self.raise_()
         
-        # 動畫淡入效果
-        self.opacity = QPropertyAnimation(self, b"windowOpacity")
-        self.opacity.setDuration(500)
-        self.opacity.setStartValue(0)
-        self.opacity.setEndValue(1)
-        self.opacity.start()
+        # [新增] 第一階段：彈出慶祝動畫 (Pop-up Celebration)
+        # 使用不透明度 + 幾何彈跳模擬 Scale Up 效果
+        if not self.name_label.graphicsEffect():
+             eff = QGraphicsOpacityEffect(self.name_label)
+             self.name_label.setGraphicsEffect(eff)
+        
+        # 透明度淡入
+        self.op_anim = QPropertyAnimation(self.name_label.graphicsEffect(), b"opacity")
+        self.op_anim.setDuration(800)
+        self.op_anim.setStartValue(0.0)
+        self.op_anim.setEndValue(1.0)
+        self.op_anim.setEasingCurve(QEasingCurve.OutBack)
+        self.op_anim.start()
+        
+        # 背景淡入
+        self.bg_anim = QPropertyAnimation(self, b"windowOpacity")
+        self.bg_anim.setDuration(500)
+        self.bg_anim.setStartValue(0)
+        self.bg_anim.setEndValue(1)
+        self.bg_anim.start()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -703,7 +734,14 @@ class DisplayWindow(QWidget):
         self.overlay = WinnerOverlay(self)
         self.confetti = ConfettiWidget(self)
         self.overlay.hide()
+        self.confetti = ConfettiWidget(self)
+        self.overlay.hide()
         self.confetti.hide()
+        
+        # [新增] 初始化飛行動畫屬性
+        self.fly_anim = None
+
+
 
         # 全螢幕設定
         self.showFullScreen()
@@ -811,6 +849,69 @@ class DisplayWindow(QWidget):
         op = QGraphicsOpacityEffect(self.right_container)
         op.setOpacity(0.2 if active else 1.0) # 轉動時變很暗 (0.2)
         self.right_container.setGraphicsEffect(op)
+
+    def animate_winner_to_list(self, name):
+        """第二階段動畫：名字飛入名單 (Fly-in Collection)"""
+        # 1. 計算起點 (螢幕中心) 與 終點 (名單末尾)
+        start_pos = self.rect().center()
+        
+        # 取得右側名單 widget
+        list_widget = self.winner_list
+        # 計算名單中下一個項目的預計位置
+        count = list_widget.count()
+        if count > 0:
+            last_rect = list_widget.visualItemRect(list_widget.item(count-1))
+            target_y = last_rect.bottom() + 10
+        else:
+            target_y = 10
+            
+        # 轉換座標 (WinnerList -> DisplayWindow)
+        # 注意：winner_list 在 right_container 內，需兩層轉換
+        global_list_pos = list_widget.mapToGlobal(QPoint(0, 0))
+        local_list_pos = self.mapFromGlobal(global_list_pos)
+        
+        # 終點 X 設為名單中心，Y 設為列表尾端
+        end_x = local_list_pos.x() + list_widget.width() / 2
+        end_y = local_list_pos.y() + target_y
+        end_pos = QPoint(int(end_x), int(end_y))
+        
+        # 2. 創建飛行標籤
+        fly_label = FlyingLabel(name, self)
+        fly_label.move(start_pos)
+        
+        # 3. 貝茲曲線與屬性動畫
+        self.fly_anim = QVariantAnimation(self)
+        self.fly_anim.setDuration(1200) # 1.2秒飛入，增加優雅感
+        self.fly_anim.setStartValue(0.0)
+        self.fly_anim.setEndValue(1.0)
+        self.fly_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        
+        # 控制點 (決定弧度)
+        # 設在起點與終點的中間，但往上拉高 (Y軸減小)，形成拋物線
+        mid_x = (start_pos.x() + end_pos.x()) / 2
+        ctrl_p1 = QPoint(int(mid_x), start_pos.y() - 300) 
+        
+        def update_step(t):
+            # 貝茲曲線公式: (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
+            x = (1-t)**2 * start_pos.x() + 2*(1-t)*t * ctrl_p1.x() + t**2 * end_pos.x()
+            y = (1-t)**2 * start_pos.y() + 2*(1-t)*t * ctrl_p1.y() + t**2 * end_pos.y()
+            fly_label.move(int(x), int(y))
+            
+            # 同步縮放 (從 2.5倍 縮到 1.0倍)
+            scale = 2.5 - (1.5 * t)
+            fly_label.set_scale(scale)
+
+        def on_finished():
+            fly_label.close()
+            # [重要] 真正將名字加入名單
+            self.add_winner(name) 
+            # 播放入榜音效 (如果有的話)
+            # QApplication.beep() 
+            
+        self.fly_anim.valueChanged.connect(update_step)
+        self.fly_anim.finished.connect(on_finished)
+        self.fly_anim.start()
+
     
     def add_winner(self, name):
         prize = self.prize_label.text().replace("🎉", "").strip()
@@ -1291,8 +1392,8 @@ class MainWindow(QMainWindow):
         # 3秒後停止彩帶
         QTimer.singleShot(3000, self.display_window.confetti.stop)
         
-        # 2. 顯示在右側得獎名單
-        self.display_window.add_winner(winner_name)
+        # [修改] 2. 執行飛入動畫並加入名單
+        self.display_window.animate_winner_to_list(winner_name)
         
         # 3. 從轉盤名單移除
         current_text = self.list_edit.toPlainText()
