@@ -2,7 +2,7 @@ import os
 import random
 import math
 from PyQt5.QtWidgets import QWidget
-from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty
+from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap
 from PyQt5.QtMultimedia import QSoundEffect
 from utils.config import COLORS
@@ -105,7 +105,13 @@ class LuckyWheelWidget(QWidget):
 
     def update_leds(self):
         # LED 動畫更新
-        if self.is_spinning:
+        # [新增] 頻閃模式判定 (快停下來前)
+        if self.is_spinning and 0 < abs(self.rotation_speed) < 8.0:
+             # Strobe Light: 快速切換開關
+             # 頻率: update_leds 是 50ms 一次，每次切換 = 10Hz 閃爍 (非常快)
+             if not hasattr(self, 'strobe_on'): self.strobe_on = False
+             self.strobe_on = not self.strobe_on
+        elif self.is_spinning:
             # 跑馬燈模式：速度隨轉速變化
             # rotation_speed 是 "度/10ms"，這裡 led_timer 是 50ms 一次
             # 讓 LED 跑動速度跟轉盤看起來有連動感
@@ -431,8 +437,7 @@ class LuckyWheelWidget(QWidget):
             finally:
                 painter.restore()
         
-        # [新增] 繪製 LED 燈圈 (畫在扇形上方，避免被蓋住)
-        self.draw_leds(painter, center, radius)
+
 
         # [新增] 速度線特效 (當速度夠快時)
         if abs(self.rotation_speed) > 20:
@@ -476,6 +481,13 @@ class LuckyWheelWidget(QWidget):
             painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
             painter.drawText(QRectF(lx, ly, label_w, label_h), Qt.AlignCenter, "抽獎人")
 
+        # [新增] 聚光燈特效 (轉動時背景變暗，聚焦於指針)
+        if self.is_spinning:
+            self.draw_spotlight(painter, rect, radius)
+            
+        # [修改] 將 LED 移至最上層繪製 (避免被 Spotlight 遮住)
+        self.draw_leds(painter, center, radius)
+
     def draw_leds(self, painter, center, radius):
         # LED 參數
         led_radius = radius * 1.12 # 稍微在光暈外
@@ -493,7 +505,17 @@ class LuckyWheelWidget(QWidget):
             ly = led_radius * math.sin(angle_rad)
             
             # 計算亮度/顏色
-            if self.is_spinning:
+            if self.is_spinning and 0 < abs(self.rotation_speed) < 8.0:
+                # [新增] 頻閃模式 (全亮/全暗)
+                is_on = getattr(self, 'strobe_on', True)
+                if is_on:
+                    color = QColor(255, 255, 255, 255) # 超亮白
+                    alpha = 255
+                else:
+                    color = QColor(0, 0, 0, 0)
+                    alpha = 0
+            
+            elif self.is_spinning:
                 # 跑馬燈 (Chasing)
                 # 計算當前 LED 距離 "跑馬頭" (led_phase) 的距離
                 # 這裡 led_phase 是 0 ~ led_count 的浮點數
@@ -645,4 +667,38 @@ class LuckyWheelWidget(QWidget):
             painter.restore()
             
         painter.restore()
+
+    def draw_spotlight(self, painter, rect, radius):
+        """繪製聚光燈效果 (黑色遮罩 + 挖洞)"""
+        # 1. 建立遮罩路徑 (全螢幕矩形)
+        overlay_path = QPainterPath()
+        overlay_path.addRect(QRectF(rect))
+        
+        # 2. 建立挖洞路徑 (圓形亮區)
+        # 洞的位置應該在指針尖端，並往上延伸以覆蓋文字
+        center = rect.center()
+        
+        # 文字大約分佈在半徑的 0.2 ~ 0.95 處
+        # 我們將聚光燈中心定在約 0.65 半徑處 (偏上方)，以覆蓋指針下方的文字區
+        target_dist = radius * 0.65
+        spot_center_y = center.y() - target_dist
+        
+        # 亮區大小 (加大以覆蓋整個扇區文字)
+        spot_radius = radius * 0.45
+        spot_center = QPoint(center.x(), int(spot_center_y))
+        
+        spot_path = QPainterPath()
+        spot_path.addEllipse(spot_center, spot_radius, spot_radius)
+        
+        # 3. 相減得到「有洞的遮罩」 (OddEvenFill 規則)
+        overlay_path.addPath(spot_path)
+        
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        # 半透明黑色
+        painter.setBrush(QColor(0, 0, 0, 160))
+        # 設置填充規則為 OddEven (重疊部分挖空)
+        painter.drawPath(overlay_path)
+        painter.restore()
+
 
