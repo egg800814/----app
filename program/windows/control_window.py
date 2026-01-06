@@ -10,6 +10,7 @@ from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtMultimedia import QSoundEffect
 from .display_window import DisplayWindow
 from ui_components.lucky_wheel import LuckyWheelWidget
+from utils.config import resource_path
 
 class ControlWindow(QMainWindow):
     """
@@ -25,8 +26,8 @@ class ControlWindow(QMainWindow):
         
         # 音效
         self.win_sound = QSoundEffect()
-        if os.path.exists("assets/sounds/win.wav"):
-            self.win_sound.setSource(QUrl.fromLocalFile("assets/sounds/win.wav"))
+        if os.path.exists(resource_path("assets/sounds/win.wav")):
+            self.win_sound.setSource(QUrl.fromLocalFile(resource_path("assets/sounds/win.wav")))
             self.win_sound.setVolume(0.8)
 
         self.prizes = [

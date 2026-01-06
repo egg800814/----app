@@ -32,14 +32,14 @@ REM 格式為 "來源資料夾;目標資料夾"，如果有多個請用空格分
 REM 例如: --add-data "assets;assets" --add-data "config;config"
 REM 如果不需要打包資料，請清空 DATA_OPTS
 REM ---------------------------------------------------------------------
-set DATA_OPTS=--add-data "assets;assets" --add-data "program;program"
+set DATA_OPTS=--add-data "program/assets;assets" --add-data "program/ui_files;ui_files"
 
 REM ---------------------------------------------------------------------
 REM [修改注意 5] 設定需要搜尋的模組路徑或隱藏匯入
 REM --paths: 增加額外的模組搜尋資料夾 (例如 program)
 REM --hidden-import: 手動加入 PyInstaller 沒偵測到的模組 (例如 ui_files)
 REM ---------------------------------------------------------------------
-set IMPORT_OPTS=--paths program --hidden-import ui_files
+set IMPORT_OPTS=--paths program --hidden-import windows --hidden-import ui_components --hidden-import utils
 
 REM =====================================================================
 REM 以下為自動執行邏輯，通常不需要修改

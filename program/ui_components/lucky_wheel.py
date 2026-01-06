@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap, QBrush, QLinearGradient
 from PyQt5.QtMultimedia import QSoundEffect
-from utils.config import COLORS
+from utils.config import COLORS, resource_path
 
 class LuckyWheelWidget(QWidget):
     spinFinished = pyqtSignal(str)
@@ -34,17 +34,17 @@ class LuckyWheelWidget(QWidget):
         # 音效設定 (建立音效池以支援多重發聲)
         self.tick_sounds = []
         self.tick_index = 0
-        if os.path.exists("assets/sounds/tick.wav"):
+        if os.path.exists(resource_path("assets/sounds/tick.wav")):
             for _ in range(50): # 建立 50 個音效實例，避免快速轉動時不夠用
                 effect = QSoundEffect()
-                effect.setSource(QUrl.fromLocalFile("assets/sounds/tick.wav"))
+                effect.setSource(QUrl.fromLocalFile(resource_path("assets/sounds/tick.wav")))
                 effect.setVolume(1.0) # 音量全開
                 self.tick_sounds.append(effect)
         
         # 載入循環音效 (快/中/慢)
-        self.snd_fast = self._load_loop_sound("assets/sounds/fast.wav")
-        self.snd_medium = self._load_loop_sound("assets/sounds/medium.wav")
-        self.snd_slow = self._load_loop_sound("assets/sounds/slow.wav")
+        self.snd_fast = self._load_loop_sound(resource_path("assets/sounds/fast.wav"))
+        self.snd_medium = self._load_loop_sound(resource_path("assets/sounds/medium.wav"))
+        self.snd_slow = self._load_loop_sound(resource_path("assets/sounds/slow.wav"))
         self.current_sound_mode = None # None, 'fast', 'medium', 'slow'
 
         # 轉盤邏輯
@@ -77,8 +77,8 @@ class LuckyWheelWidget(QWidget):
         return None
 
     def load_default_logo(self):
-        if os.path.exists("assets/images/logo.png"):
-            self.logo_pixmap = QPixmap("assets/images/logo.png")
+        if os.path.exists(resource_path("assets/images/logo.png")):
+            self.logo_pixmap = QPixmap(resource_path("assets/images/logo.png"))
 
     def set_items(self, items_text):
         if isinstance(items_text, list):
