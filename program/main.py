@@ -1,6 +1,7 @@
 import sys
 import os
 import random
+import math
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QFileDialog, QMessageBox, QLineEdit, QComboBox, 
@@ -58,6 +59,13 @@ class LuckyWheelWidget(QWidget):
         self.logo_pixmap = None
         self.load_default_logo()
 
+        # LED 裝飾邏輯
+        self.led_count = 36
+        self.led_phase = 0.0
+        self.led_timer = QTimer(self)
+        self.led_timer.timeout.connect(self.update_leds)
+        self.led_timer.start(50) # 20 FPS for LEDs (順暢度足夠)
+
     def _load_loop_sound(self, filename):
         if os.path.exists(filename):
             snd = QSoundEffect(self)
@@ -96,6 +104,23 @@ class LuckyWheelWidget(QWidget):
         else:
             self.presenter_pixmap = None
         self.update()
+
+    def update_leds(self):
+        # LED 動畫更新
+        if self.is_spinning:
+            # 跑馬燈模式：速度隨轉速變化
+            # rotation_speed 是 "度/10ms"，這裡 led_timer 是 50ms 一次
+            # 讓 LED 跑動速度跟轉盤看起來有連動感
+            speed_factor = self.rotation_speed * 0.5 
+            if speed_factor < 0.5: speed_factor = 0.5 # 最低速度
+            self.led_phase = (self.led_phase + speed_factor) % self.led_count
+        else:
+            # 呼吸燈模式
+            self.led_phase += 0.4 # 加快速度製造緊張感
+        
+        # 如果沒有在轉動 (update_spin 沒在跑)，這裡要觸發 update 讓 LED 動起來
+        if not self.is_spinning:
+            self.update()
 
     def _update_sound_volumes(self, mode):
         # 根據模式調整音量 (只開啟對應模式的聲音)
@@ -263,6 +288,9 @@ class LuckyWheelWidget(QWidget):
                         painter.restore()
             finally:
                 painter.restore()
+        
+        # [新增] 繪製 LED 燈圈 (畫在扇形上方，避免被蓋住)
+        self.draw_leds(painter, center, radius)
 
         # 3. 指針 (從中間往外指，指向12點鐘方向)
         self.draw_pointer(painter, rect, radius)
@@ -299,7 +327,78 @@ class LuckyWheelWidget(QWidget):
             painter.drawRoundedRect(int(lx), int(ly), int(label_w), int(label_h), 10, 10)
             painter.setPen(Qt.white)
             painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
+            painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
             painter.drawText(QRectF(lx, ly, label_w, label_h), Qt.AlignCenter, "抽獎人")
+
+    def draw_leds(self, painter, center, radius):
+        # LED 參數
+        led_radius = radius * 1.12 # 稍微在光暈外
+        bulb_size = radius * 0.04  # 燈泡大小
+        
+        painter.save()
+        painter.translate(center)
+        
+        for i in range(self.led_count):
+            angle_deg = i * (360 / self.led_count)
+            angle_rad = math.radians(angle_deg)
+            
+            # 計算位置
+            lx = led_radius * math.cos(angle_rad)
+            ly = led_radius * math.sin(angle_rad)
+            
+            # 計算亮度/顏色
+            if self.is_spinning:
+                # 跑馬燈 (Chasing)
+                # 計算當前 LED 距離 "跑馬頭" (led_phase) 的距離
+                # 這裡 led_phase 是 0 ~ led_count 的浮點數
+                dist = (self.led_phase - i) % self.led_count
+                
+                # 拖尾效果: 距離越近越亮
+                # 假設尾巴長度 8 顆
+                tail_len = 8.0
+                if dist < tail_len:
+                    intensity = 1.0 - (dist / tail_len)
+                else:
+                    intensity = 0.1 # 底色微亮
+                
+                # 顏色: 旋轉時用彩色或亮黃色
+                # 這裡用 金黃色 高亮
+                alpha = int(255 * intensity)
+                # color = QColor(255, 215, 0, alpha)
+                # 讓頭部稍微白一點
+                if intensity > 0.8:
+                     color = QColor(255, 255, 200, alpha)
+                else:
+                     color = QColor(255, 165, 0, alpha)
+                     
+            else:
+                # 呼吸燈 (Breathing)
+                # 全部一起閃爍
+                # sin 範圍 -1 ~ 1 -> 0 ~ 1
+                intensity = (math.sin(self.led_phase) + 1) / 2
+                # 限制最小值，不要全暗
+                intensity = 0.3 + 0.7 * intensity
+                
+                alpha = int(255 * intensity)
+                # 呼吸時用 喜氣洋洋的紅色 或 金色? 用多色交替?
+                # 偶數紅，奇數黃
+                if i % 2 == 0:
+                    color = QColor(255, 69, 0, alpha) # 紅橙
+                else:
+                    color = QColor(255, 215, 0, alpha) # 金
+            
+            # 畫燈泡
+            
+            # 1. 燈泡光暈
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), int(alpha * 0.5)))
+            painter.drawEllipse(QRectF(lx - bulb_size*0.8, ly - bulb_size*0.8, bulb_size*1.6, bulb_size*1.6))
+            
+            # 2. 燈泡本體
+            painter.setBrush(color)
+            painter.drawEllipse(QRectF(lx - bulb_size/2, ly - bulb_size/2, bulb_size, bulb_size))
+            
+        painter.restore()
 
     def draw_pointer(self, painter, rect, radius):
         center_x = rect.center().x()
@@ -716,6 +815,9 @@ class MainWindow(QMainWindow):
         
         # 初始化預覽數據
         self.update_preview_list()
+        
+        # [新增] 一開始就先同步名單到大螢幕 (不需按發布)
+        self.display_window.wheel.set_items(self.list_edit.toPlainText())
         
         # [新增] 即時監控 Timer
         self.monitor_timer = QTimer(self)
