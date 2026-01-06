@@ -64,6 +64,9 @@ class LuckyWheelWidget(QWidget):
         self.led_timer.timeout.connect(self.update_leds)
         self.led_timer.start(50) # 20 FPS for LEDs (順暢度足夠)
 
+        # 震動特效偏移量
+        self.shake_offset = QPoint(0, 0)
+
     def _load_loop_sound(self, filename):
         if os.path.exists(filename):
             snd = QSoundEffect(self)
@@ -293,6 +296,11 @@ class LuckyWheelWidget(QWidget):
         self.update()
 
     def _play_tick(self):
+         # [新增] 震動特效：每次跟著音效產生微小位移
+         shift_x = random.randint(-3, 3) 
+         shift_y = random.randint(-3, 3)
+         self.shake_offset = QPoint(shift_x, shift_y)
+
          if self.tick_sounds:
              effect = self.tick_sounds[self.tick_index]
              if effect.isPlaying():
@@ -389,6 +397,15 @@ class LuckyWheelWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        
+        # [新增] 應用震動位移
+        if not self.shake_offset.isNull():
+            painter.translate(self.shake_offset)
+            # 畫完這一幀後重置，確保只持續一幀 (Impulse)
+            # 注意：不能在這裡直接修改 self.shake_offset，因為 paintEvent 可能會被重繪多次
+            # 但在這個邏輯下，我們希望它顯現一次就消失，所以這是一種簡單的 auto-reset
+            self.shake_offset = QPoint(0, 0)
+            
         rect = self.rect()
         center = rect.center()
         radius = min(rect.width(), rect.height()) / 2 * 0.8 
