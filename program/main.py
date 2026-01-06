@@ -40,7 +40,9 @@ class LuckyWheelWidget(QWidget):
         self.current_angle = 0
         self.rotation_speed = 0
         self.is_spinning = False
-        self.friction = 0.98 # [調整] 摩擦力 (越接近1轉越久, 0.98 -> 0.99)
+        self.base_friction = 0.99 # 一般滑行摩擦力 (阻力小)
+        self.peg_friction = 0.95  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
+        self.friction = self.base_friction # 當前摩擦力
         
         # 音效設定
         # 音效設定 (建立音效池以支援多重發聲)
@@ -170,6 +172,24 @@ class LuckyWheelWidget(QWidget):
     def update_spin(self):
         self.current_angle += self.rotation_speed
         self.current_angle %= 360
+        
+        # [新增] 擋板物理模擬
+        n = len(self.items)
+        if n > 0:
+            slice_angle = 360 / n
+            # 計算指針(270度)相對於當前扇區起始邊的偏移角度
+            # (270 - current_angle) 是指針在盤面上的相對角度
+            # 對 slice_angle 取餘數，得到指針在該扇區內的「進度」 (0 ~ slice_angle)
+            offset = (270 - self.current_angle) % slice_angle
+            
+            # 定義擋板範圍：扇區交界處前後 2 度
+            # 如果 offset 很小 (剛進入) 或 offset 很大 (快離開)，代表撞到擋板
+            peg_width = 2.0
+            if offset < peg_width or offset > (slice_angle - peg_width):
+                self.friction = self.peg_friction # 撞擊擋板，阻力變大
+            else:
+                self.friction = self.base_friction # 扇區中間，阻力恢復
+        
         self.rotation_speed *= self.friction
         
         # --- 音效觸發邏輯 ---
