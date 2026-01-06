@@ -295,7 +295,8 @@ class LuckyWheelWidget(QWidget):
              self._stop_all_loops()
              
              winner = self.items[current_index]
-             QTimer.singleShot(3000, lambda: self._emit_finished(winner))
+             # [調整] 轉盤停下後，停頓 1 秒再彈出中獎畫面 (原本是 3秒 太久了)
+             QTimer.singleShot(1000, lambda: self._emit_finished(winner))
         
         self.update()
 
@@ -1149,17 +1150,7 @@ class MainWindow(QMainWindow):
         """)
         self.sys_spin_btn.clicked.connect(self.master_start_spin)
         
-        # [新增] 測試按鈕 (慢速轉動，測試物理)
-        self.test_spin_btn = QPushButton("🧪 測試轉動 (1/10 Speed)")
-        self.test_spin_btn.setMinimumHeight(40)
-        self.test_spin_btn.setStyleSheet("""
-            QPushButton { 
-                background-color: #555;
-                color: white; font-size: 18px; border-radius: 8px; border: 1px solid #aaa;
-            }
-            QPushButton:hover { background-color: #777; }
-        """)
-        self.test_spin_btn.clicked.connect(self.test_start_spin)
+
         
         # [新增] 右下角即時監控
         kp_layout = QHBoxLayout()
@@ -1187,7 +1178,7 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.preview_label)
         preview_layout.addWidget(wheel_container, 1)
         preview_layout.addWidget(self.sys_spin_btn)
-        preview_layout.addWidget(self.test_spin_btn) # 加入測試按鈕
+
         preview_layout.addLayout(kp_layout) # 放到最下方
         
         layout.addWidget(control_panel, 1)
@@ -1333,22 +1324,8 @@ class MainWindow(QMainWindow):
         # 3. UI 狀態
         self.display_window.spin_btn.setEnabled(False)
         self.sys_spin_btn.setEnabled(False)
-        self.test_spin_btn.setEnabled(False)
 
-    def test_start_spin(self):
-        """測試模式：低速啟動 (1/10 速度)"""
-        if self.display_window.wheel.is_spinning:
-            return
 
-        # 產生低速參數 (2.5 ~ 4.0)
-        speed = random.uniform(1.0, 2.0)
-        
-        self.display_window.set_focus_mode(True)
-        self.display_window.wheel.start_spin(initial_speed=speed)
-        
-        self.display_window.spin_btn.setEnabled(False)
-        self.sys_spin_btn.setEnabled(False)
-        self.test_spin_btn.setEnabled(False)
 
     def on_spin_finished(self, winner_name):
         """當轉盤動畫完全停止時觸發"""
@@ -1378,10 +1355,7 @@ class MainWindow(QMainWindow):
             self.display_window.overlay.hide()
             self.display_window.set_focus_mode(False)
             self.sys_spin_btn.setEnabled(True)
-            self.display_window.set_focus_mode(False)
-            self.sys_spin_btn.setEnabled(True)
             self.display_window.spin_btn.setEnabled(True)
-            self.test_spin_btn.setEnabled(True)
 
     def confirm_winner(self, winner_name):
         # 1. 啟動彩帶 (音效已提前播放)
