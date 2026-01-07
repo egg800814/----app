@@ -1,6 +1,13 @@
 import os
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QGraphicsOpacityEffect
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QVariantAnimation, QEasingCurve, QTimer
+import sys
+
+# 若直接執行此檔案，將上層目錄加入 sys.path 以讀取模組
+if __name__ == "__main__":
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QGraphicsOpacityEffect, QApplication
+from PyQt5.QtGui import QPixmap, QCursor, QImage
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QVariantAnimation, QEasingCurve, QTimer, QEvent
 from ui_components.lucky_wheel import LuckyWheelWidget
 from ui_components.effects import ConfettiWidget, WinnerOverlay, FlyingLabel
 
@@ -24,6 +31,135 @@ class DisplayWindow(QWidget):
         
         # [新增] 初始化飛行動畫屬性
         self.fly_anim = None
+
+        # [新增] 滑鼠跟隨 Logo
+        self.cursor_fol_label = QLabel(self)
+        self.cursor_state = "normal" # normal, active
+        self.pixmap_normal = None
+        self.pixmap_active = None
+        
+        try:
+            # 取得 assets 資料夾絕對路徑
+            # base_dir = .../program
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            
+            # project_root = .../抽獎轉盤app
+            project_root = os.path.dirname(base_dir)
+            
+            # logo.jpg 與 90_logo.jpg 都在 專案根目錄/assets/images 下
+            logo_path = os.path.join(project_root, "assets", "images", "logo.jpg")
+            logo_active_path = os.path.join(project_root, "assets", "images", "90_logo.jpg")
+            
+            # 如果找不到，嘗試在 program/assets/images 找 (容錯)
+            if not os.path.exists(logo_active_path):
+                 logo_active_path = os.path.join(base_dir, "assets", "images", "90_logo.jpg")
+            
+            # 載入一般狀態圖片 (Logo)
+            if os.path.exists(logo_path):
+                pix = QPixmap(logo_path)
+                # 90 週年圖片與 Logo 去背處理 (將白色背景轉為透明)
+                # 注意：這會將所有純白色像素變更為透明
+                pix.setMask(pix.createMaskFromColor(Qt.white))
+                self.pixmap_normal = pix.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            else:
+                print(f"Warning: Logo not found at {logo_path}")
+
+            # 載入活躍狀態圖片 (90_logo)
+            if os.path.exists(logo_active_path):
+                pix = QPixmap(logo_active_path)
+                
+                # [修正] 使用 QImage.Format_ARGB32 (5) 以支援透明度
+                # 之前使用 4 (RGB32) 會導致 Alpha 被忽略，變成黑色
+                temp_pix = pix.scaled(250, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                img = temp_pix.toImage().convertToFormat(QImage.Format_ARGB32)
+                
+                width = img.width()
+                height = img.height()
+                
+                from PyQt5.QtGui import qRed, qGreen, qBlue
+                
+                # BFS Flood Fill (從四個角落開始找白色背景)
+                visited = set()
+                # 檢查四個角落，如果是白色就加入起始點
+                start_points = [(0, 0), (width-1, 0), (0, height-1), (width-1, height-1)]
+                stack = []
+                
+                for x, y in start_points:
+                    p = img.pixel(x, y)
+                    # [調整] 門檻值設為 230，更能容忍 JPG 的白色雜訊，確保背景能被選取
+                    if qRed(p) > 230 and qGreen(p) > 230 and qBlue(p) > 230:
+                        stack.append((x, y))
+
+                while stack:
+                    x, y = stack.pop()
+                    if (x, y) in visited: continue
+                    visited.add((x, y))
+                    
+                    # 檢查四鄰居
+                    for nx, ny in [(x+1, y), (x-1, y), (x, y+1), (x, y-1)]:
+                        if 0 <= nx < width and 0 <= ny < height and (nx, ny) not in visited:
+                            p = img.pixel(nx, ny)
+                            # 同樣使用 230
+                            if qRed(p) > 230 and qGreen(p) > 230 and qBlue(p) > 230:
+                                stack.append((nx, ny))
+                
+                # [新增] 邊緣保留邏輯 (Erosion)
+                # 使用者希望能保留 "一點點" 白色邊緣
+                # 加大 padding_size 讓白邊更明顯
+                padding_size = 5 # 保留 5 像素寬的白邊
+                
+                bg_pixels = visited
+                
+                for _ in range(padding_size):
+                    border_pixels = set()
+                    for x, y in bg_pixels:
+                        # 檢查 8 鄰居 (讓邊緣更圓滑)
+                        is_border = False
+                        for nx in range(x-1, x+2):
+                            for ny in range(y-1, y+2):
+                                if (nx == x and ny == y): continue
+                                # 如果鄰居在圖片範圍內，且不在 current bg_pixels 裡，代表它是 "內容" (或是已保留的邊緣)
+                                # 那目前的 (x,y) 就是新的邊緣，應該被保留
+                                if 0 <= nx < width and 0 <= ny < height:
+                                    if (nx, ny) not in bg_pixels:
+                                        is_border = True
+                                        break
+                            if is_border: break
+                        
+                        if is_border:
+                            border_pixels.add((x, y))
+                    
+                    # 將邊緣從背景集合中移除 (也就是保留下來不透明)
+                    bg_pixels = bg_pixels - border_pixels
+                
+                # 最後執行去背
+                for x, y in bg_pixels:
+                     img.setPixel(x, y, 0)
+                
+                self.pixmap_active = QPixmap.fromImage(img)
+            else:
+                print(f"Warning: Active Logo not found at {logo_active_path}")
+
+            # 初始設定
+            if self.pixmap_normal:
+                self.cursor_fol_label.setPixmap(self.pixmap_normal)
+                self.cursor_fol_label.setFixedSize(self.pixmap_normal.size())
+                self.cursor_fol_label.setAttribute(Qt.WA_TransparentForMouseEvents) # 讓滑鼠點擊可穿透
+                self.cursor_fol_label.show()
+                self.cursor_fol_label.raise_()
+                
+        except Exception as e:
+            print(f"Error loading cursor logo: {e}")
+
+        self.setMouseTracking(True) # 啟用滑鼠追蹤
+        
+        # [修改] 使用 Timer 進行滑鼠追蹤更新
+        # 這能確保 (1) 游標永遠在最上層 (透過不斷 raise_) (2) 跟隨速度穩定流暢
+        self.cursor_timer = QTimer(self)
+        self.cursor_timer.timeout.connect(self.update_cursor_position)
+        self.cursor_timer.start(16) # 約 60 FPS
+
+
 
         # 全螢幕設定
         self.showFullScreen()
@@ -208,6 +344,8 @@ class DisplayWindow(QWidget):
             self.overlay.resize(self.size())
         if hasattr(self, 'confetti'):
             self.confetti.resize(self.size())
+        if hasattr(self, 'cursor_fol_label'):
+             self.cursor_fol_label.raise_()
         super().resizeEvent(event)
 
     def update_prize_name(self, prize_name):
@@ -220,3 +358,74 @@ class DisplayWindow(QWidget):
     def hide_winner_message(self):
         self.overlay.hide()
         self.spin_btn.show()
+
+    def update_cursor_position(self):
+        """定時更新 Logo 位置與層級"""
+        if hasattr(self, 'cursor_fol_label') and self.cursor_fol_label.isVisible():
+            # 1. 強制置頂
+            self.cursor_fol_label.raise_()
+            
+            # 2. 偵測滑鼠下方的元件狀態 (檢查是否為手指游標)
+            global_pos = QCursor.pos()
+            widget_under_mouse = QApplication.widgetAt(global_pos)
+            
+            is_hovering_btn = False
+            if widget_under_mouse:
+                # 向上遍歷檢查是否有 PointingHandCursor
+                curr = widget_under_mouse
+                while curr:
+                    if curr.cursor().shape() == Qt.PointingHandCursor:
+                        is_hovering_btn = True
+                        break
+                    if curr.isWindow(): break # 到了視窗層就停止
+                    curr = curr.parent()
+            
+            # 狀態切換邏輯
+            target_pixmap = self.pixmap_normal
+            current_state_str = "normal"
+            
+            if is_hovering_btn and self.pixmap_active:
+                target_pixmap = self.pixmap_active
+                current_state_str = "active"
+            
+            # 只有在狀態改變時才更新 Pixmap (節省資源)
+            if self.cursor_state != current_state_str:
+                self.cursor_state = current_state_str
+                if target_pixmap:
+                    self.cursor_fol_label.setPixmap(target_pixmap)
+                    self.cursor_fol_label.setFixedSize(target_pixmap.size())
+
+            # 3. 計算位置
+            local_pos = self.mapFromGlobal(global_pos)
+            
+            
+            if self.cursor_state == "active":
+                # 手指狀態：放在手指下方且置中
+                # [修正] 圖片寬度改為 250，所以向左移 125 以置中
+                # 假設手指游標高約 30，所以向下移 30
+                target_pos = local_pos + QPoint(-125, 30)
+            else:
+                # 一般狀態：緊貼箭頭右下
+                target_pos = local_pos + QPoint(8, 8)
+            
+            self.cursor_fol_label.move(target_pos)
+
+    # 移除 eventFilter，改用 Timer 處理全域滑鼠
+    # def eventFilter(self, source, event): ...
+
+if __name__ == "__main__":
+    from PyQt5.QtCore import QCoreApplication
+    
+    # 嘗試設定 PyQt5 Plugin 路徑
+    # 假設 sys.executable 在 .venv/Scripts/python.exe
+    venv_root = os.path.dirname(os.path.dirname(sys.executable))
+    plugin_path = os.path.join(venv_root, "Lib", "site-packages", "PyQt5", "Qt5", "plugins")
+    
+    if os.path.exists(plugin_path):
+        QCoreApplication.addLibraryPath(plugin_path)
+    
+    app = QApplication(sys.argv)
+    window = DisplayWindow()
+    window.show()
+    sys.exit(app.exec_())
+
