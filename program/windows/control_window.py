@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QFrame, QInputDialog, QSizePolicy, QSlider)
 from PyQt5.QtCore import Qt, QTimer, QUrl, QSize
 from PyQt5.QtGui import QFont, QImage, QPixmap
-from PyQt5.QtMultimedia import QSoundEffect
+from PyQt5.QtMultimedia import QSoundEffect, QMediaPlayer, QMediaContent
 from .display_window import DisplayWindow
 from ui_components.lucky_wheel import LuckyWheelWidget
 from utils.config import resource_path
@@ -36,10 +36,31 @@ class ControlWindow(QMainWindow):
         self.resize(1400, 900) # [修改] 加大視窗尺寸
         
         # 音效
-        self.win_sound = QSoundEffect()
-        if os.path.exists(resource_path("assets/sounds/win.wav")):
-            self.win_sound.setSource(QUrl.fromLocalFile(resource_path("assets/sounds/win.wav")))
-            self.win_sound.setVolume(0.8)
+        self.win_sound = QMediaPlayer()
+        
+        # [修改] 改為優先尋找 WAV 檔案 (相容性最好)
+        # 請使用者將 win2.mp3 轉檔為 win2.wav 以避免解碼錯誤
+        cwd = os.getcwd()
+        wav2_path = resource_path("assets/sounds/win2.wav")
+        print(f"[Debug] CWD: {cwd}")
+        print(f"[Debug] Checking win2.wav at: {wav2_path}")
+        print(f"[Debug] Exists? {os.path.exists(wav2_path)}")
+        
+        sounds_dir = resource_path("assets/sounds")
+        if os.path.exists(sounds_dir):
+             print(f"[Debug] Sounds dir content: {os.listdir(sounds_dir)}")
+        
+        if os.path.exists(wav2_path):
+            self.win_sound.setMedia(QMediaContent(QUrl.fromLocalFile(wav2_path)))
+            self.win_sound.setVolume(80)
+            print(f"[Init] 已載入音效: {wav2_path}")
+        elif os.path.exists(resource_path("assets/sounds/win.wav")):
+            path = resource_path("assets/sounds/win.wav")
+            self.win_sound.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
+            self.win_sound.setVolume(80)
+            print(f"[Init] 已載入備用音效: {path}")
+        else:
+            print("[Init] 未找到任何支援的音效檔 (建議使用 .wav 格式)")
 
         self.prizes = [
             "副總經理獎 - 6,000元", 
@@ -609,8 +630,12 @@ class ControlWindow(QMainWindow):
             self.display_window.overlay.show_winner(winner_name, current_prize)
         
         # [修改] 中獎音樂提前至此處播放
-        if hasattr(self, 'win_sound') and self.win_sound.source().isValid():
+        # [修改] 中獎音樂提前至此處播放
+        if hasattr(self, 'win_sound'):
+            # 強制停止前一次播放(若有)，確保重新開始
+            self.win_sound.stop()
             self.win_sound.play()
+            print("[Debug] QMediaPlayer play() called")
 
         # 2. 系統端跳出確認視窗 (Action)
         msg = QMessageBox(self)
