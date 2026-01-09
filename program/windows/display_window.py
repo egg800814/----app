@@ -7,7 +7,7 @@ if __name__ == "__main__":
 
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QGraphicsOpacityEffect, QApplication
 from PyQt5.QtGui import QPixmap, QCursor, QImage
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QVariantAnimation, QEasingCurve, QTimer, QEvent
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QVariantAnimation, QEasingCurve, QTimer, QEvent, QThread
 from ui_components.lucky_wheel import LuckyWheelWidget
 from ui_components.effects import ConfettiWidget, WinnerOverlay, FlyingLabel
 
@@ -174,8 +174,8 @@ class DisplayWindow(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         
         # --- LEFT SIDE: Wheel & Title ---
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
+        self.left_container = QWidget()
+        left_layout = QVBoxLayout(self.left_container)
         
         # 頂部：目前抽獎項目標題
         self.prize_label = QLabel("🎉 MDIT 尾牙抽獎活動準備中 🎉")
@@ -193,8 +193,8 @@ class DisplayWindow(QWidget):
         # 轉盤
         self.wheel = LuckyWheelWidget()
         
-        # 開始按鈕 (保留，但現在主要由後台控制)
-        self.spin_btn = QPushButton("開始抽獎")
+        # 開始按鈕 (設為浮動，不放入 Layout 以免影響轉盤大小)
+        self.spin_btn = QPushButton("開始抽獎", self) 
         self.spin_btn.setFixedSize(200, 80)
         self.spin_btn.setCursor(Qt.PointingHandCursor)
         self.spin_btn.setStyleSheet("""
@@ -207,14 +207,21 @@ class DisplayWindow(QWidget):
         """)
         self.spin_btn.clicked.connect(self.requestSpin.emit)
         
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.spin_btn)
-        btn_layout.addStretch()
-
+        # ---------------------------------------------------------
+        # [按鈕位置設定]
+        # 若要修改按鈕位置，請調整以下兩個數值：
+        # 1. current_offset_x (水平偏移): 正數往右，負數往左
+        # 2. current_margin_bottom (底部距離): 數值越大離底部越遠
+        # ---------------------------------------------------------
+        self.current_offset_x = 1000
+        self.current_margin_bottom = 150
+        # ---------------------------------------------------------
+        
+        # 初始定位
+        QTimer.singleShot(0, self.update_btn_pos)
+        
         left_layout.addWidget(self.prize_label)
         left_layout.addWidget(self.wheel, 1)
-        left_layout.addLayout(btn_layout)
         
         # --- RIGHT SIDE: Winner List ---
         self.right_container = QWidget()
@@ -259,8 +266,34 @@ class DisplayWindow(QWidget):
         right_layout.addWidget(self.winner_list)
         
         # Add to main layout
-        main_layout.addWidget(left_container, 7)
+        main_layout.addWidget(self.left_container, 7)
         main_layout.addWidget(self.right_container, 3)
+        
+    def update_btn_pos(self):
+        """[絕對定位] 根據目前的 x, y 與 左側容器位置，計算按鈕座標"""
+        # 確保 spin_btn 在最上層且顯示
+        self.spin_btn.show()
+        self.spin_btn.raise_()
+        
+        # 取得左側容器的中心點 X
+        # 注意：在程式剛啟動時 geometry 可能尚未完全確定，使用 resizeEvent 修正
+        if hasattr(self, 'left_container'):
+            container_geo = self.left_container.geometry()
+            center_x = container_geo.center().x()
+        else:
+            center_x = self.width() * 0.35 # 粗略估計
+            
+        btn_w = self.spin_btn.width()
+        btn_h = self.spin_btn.height()
+        
+        # 計算 X: 容器中心 + 偏移量 - 按鈕一半寬
+        target_x = center_x + self.current_offset_x - (btn_w / 2)
+        
+        # 計算 Y: 視窗底部 - 底部距離 - 按鈕高
+        # 注意: 這裡都用 self.height() (視窗總高)，確保是相對於螢幕底部
+        target_y = self.height() - self.current_margin_bottom - btn_h
+        
+        self.spin_btn.move(int(target_x), int(target_y))
 
     def set_focus_mode(self, active):
         """專注模式：轉動時將右側名單變暗"""
@@ -346,6 +379,11 @@ class DisplayWindow(QWidget):
             self.confetti.resize(self.size())
         if hasattr(self, 'cursor_fol_label'):
              self.cursor_fol_label.raise_()
+        
+        # [新增] 視窗大小改變時，重新計算按鈕位置
+        if hasattr(self, 'spin_btn'):
+            self.update_btn_pos()
+            
         super().resizeEvent(event)
 
     def update_prize_name(self, prize_name):
@@ -361,6 +399,10 @@ class DisplayWindow(QWidget):
 
     def update_cursor_position(self):
         """定時更新 Logo 位置與層級"""
+        # [修正] 確保按鈕在最上層
+        if hasattr(self, 'spin_btn') and self.spin_btn.isVisible():
+            self.spin_btn.raise_()
+            
         if hasattr(self, 'cursor_fol_label') and self.cursor_fol_label.isVisible():
             # 1. 強制置頂
             self.cursor_fol_label.raise_()
@@ -412,6 +454,8 @@ class DisplayWindow(QWidget):
 
     # 移除 eventFilter，改用 Timer 處理全域滑鼠
     # def eventFilter(self, source, event): ...
+
+
 
 if __name__ == "__main__":
     from PyQt5.QtCore import QCoreApplication
