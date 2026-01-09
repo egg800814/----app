@@ -195,9 +195,9 @@ class ControlWindow(QMainWindow):
         shuffle_btn.setStyleSheet("background-color: #2980b9; margin-top: 5px;")
         shuffle_btn.clicked.connect(self.shuffle_list)
 
-        update_list_btn = QPushButton("🔄 更新暫存名單 (僅預覽)")
+        update_list_btn = QPushButton("💾 儲存並更新名單")
         update_list_btn.setStyleSheet("background-color: #27ae60; margin-top: 5px;")
-        update_list_btn.clicked.connect(self.update_preview_list)
+        update_list_btn.clicked.connect(self.save_confirmed_list)
         
         btns_layout = QHBoxLayout()
         btns_layout.addWidget(shuffle_btn)
@@ -432,9 +432,13 @@ class ControlWindow(QMainWindow):
         data = {
             "prizes": self.prizes,
             "prize_avatars": self.prize_avatars,
-            "list_content": self.list_edit.toPlainText(),
+            "list_content": self.list_content,
             "current_prize_idx": self.prize_combo.currentIndex()
         }
+        
+        # [Debug] 確認要存檔的內容
+        print(f"[Save Debug] List Content Length: {len(self.list_content)}")
+        print(f"[Save Debug] First 20 chars: {self.list_content[:20]}...")
         
         try:
             target_file = self.get_data_file_path()
@@ -462,9 +466,10 @@ class ControlWindow(QMainWindow):
                 
             if "prize_avatars" in data and isinstance(data["prize_avatars"], dict):
                 self.prize_avatars = data["prize_avatars"]
-                
+            
+            # [恢復] 讀取存檔中的名單 (如果有)
             if "list_content" in data and isinstance(data["list_content"], str):
-                self.list_content = data["list_content"]
+                 self.list_content = data["list_content"]
                 
             if "current_prize_idx" in data:
                 self.current_prize_idx = int(data["current_prize_idx"])
@@ -473,7 +478,19 @@ class ControlWindow(QMainWindow):
             
         except Exception as e:
             print(f"[Load Error] 讀檔失敗，使用預設值: {e}")
-            # 不阻擋程式開啟，僅顯示錯誤在 Console
+
+    def save_confirmed_list(self):
+        # [修改] 按下更新按鈕時，才將編輯框內容視為正式名單並存檔
+        self.list_content = self.list_edit.toPlainText()
+        
+        # 僅更新預覽轉盤
+        self.preview_wheel.set_items(self.list_content)
+        
+        # 自動存檔
+        self.save_data()
+        
+        # 提示
+        QMessageBox.information(self, "已更新", "名單已確認並儲存！")
 
     def setup_style(self):
         # 設定全域 MessageBox 樣式
