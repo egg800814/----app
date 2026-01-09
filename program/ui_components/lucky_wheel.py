@@ -234,7 +234,7 @@ class LuckyWheelWidget(QWidget):
             is_rebounding_prev = (offset < peg_influence and self.rotation_speed > 0)
             
             if is_rebounding_next or is_rebounding_prev:
-                self.rotation_speed *= 0.85 # 強力阻尼
+                self.rotation_speed *= self.peg_friction # 強力阻尼 (可調整)
                 
             # [核心修正] 動能耗損邏輯
             

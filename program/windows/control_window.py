@@ -14,7 +14,7 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QTextEdit, QLabel, 
                              QFileDialog, QMessageBox, QLineEdit, QComboBox, 
-                             QGroupBox, QFrame, QInputDialog, QSizePolicy)
+                             QGroupBox, QFrame, QInputDialog, QSizePolicy, QSlider)
 from PyQt5.QtCore import Qt, QTimer, QUrl, QSize
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtMultimedia import QSoundEffect
@@ -172,6 +172,69 @@ class ControlWindow(QMainWindow):
         presenter_btn.setStyleSheet("background-color: #e67e22;")
         presenter_btn.clicked.connect(self.load_avatar)
         
+        # [新增] 轉速與阻力微調區
+        physics_group = QGroupBox("⚙️ 轉速與阻力微調")
+        physics_group.setStyleSheet("""
+            QGroupBox { border: 2px solid #e67e22; } 
+            QLabel { font-size: 15px; color: #dfe6e9; font-weight: bold; } /* [修改] 字體放大 */
+        """)
+        phy_layout = QVBoxLayout(physics_group)
+        
+        # --- 滑桿 A: 一般滑行阻力 (Base Friction) ---
+        # 範圍 0.950 ~ 0.999 -> Slider 0 ~ 100
+        lbl_base_title = QLabel("滑行阻力 (Base Friction)")
+        lbl_base_title.setStyleSheet("font-weight: bold; color: #f1c40f; font-size: 16px;") # [修改] 標題再大一點
+        
+        hbox_base = QHBoxLayout()
+        self.slider_base = QSlider(Qt.Horizontal)
+        self.slider_base.setRange(0, 100)
+        self.slider_base.setValue(80) 
+        self.slider_base.valueChanged.connect(self.update_physics_params)
+        
+        self.lbl_base_val = QLabel("0.99")
+        self.lbl_base_val.setFixedWidth(50)
+        self.lbl_base_val.setStyleSheet("color: yellow; font-size: 15px;") # [修改] 數值強調
+        
+        hbox_base.addWidget(QLabel("煞車快"))
+        hbox_base.addWidget(self.slider_base)
+        hbox_base.addWidget(QLabel("滑行遠"))
+        hbox_base.addWidget(self.lbl_base_val)
+        
+        # --- 滑桿 B: 擋板撞擊阻力 (Peg Friction) ---
+        # 範圍 0.50 ~ 0.95 -> Slider 0 ~ 100
+        lbl_peg_title = QLabel("撞擊阻力 (Peg Friction)")
+        lbl_peg_title.setStyleSheet("font-weight: bold; color: #e74c3c; font-size: 16px;") # [修改] 標題再大一點
+        
+        hbox_peg = QHBoxLayout()
+        self.slider_peg = QSlider(Qt.Horizontal)
+        self.slider_peg.setRange(0, 100)
+        self.slider_peg.setValue(77) 
+        self.slider_peg.valueChanged.connect(self.update_physics_params)
+        
+        self.lbl_peg_val = QLabel("0.85")
+        self.lbl_peg_val.setFixedWidth(50)
+        self.lbl_peg_val.setStyleSheet("color: yellow; font-size: 15px;") # [修改] 數值強調
+        
+        # [修改] 標示改為阻力大小 (注意: 左邊是數值小=阻力大還是小? 
+        # 邏輯: self.peg_friction 數值越小(e.g 0.5)，乘上去後速度剩越少 -> 阻力越大
+        # Slider=0 -> peg_f=0.5 (速度剩一半) -> 阻力大
+        # Slider=100 -> peg_f=0.95 (速度幾乎不變) -> 阻力小
+        hbox_peg.addWidget(QLabel("阻力大")) 
+        hbox_peg.addWidget(self.slider_peg)
+        hbox_peg.addWidget(QLabel("阻力小"))
+        hbox_peg.addWidget(self.lbl_peg_val)
+        
+        # 恢復預設按鈕
+        btn_reset_phy = QPushButton("↩️ 恢復預設值")
+        btn_reset_phy.setStyleSheet("background-color: #95a5a6; font-size: 14px; padding: 5px; font-weight: bold;")
+        btn_reset_phy.clicked.connect(self.reset_physics_params)
+        
+        phy_layout.addWidget(lbl_base_title)
+        phy_layout.addLayout(hbox_base)
+        phy_layout.addWidget(lbl_peg_title)
+        phy_layout.addLayout(hbox_peg)
+        phy_layout.addWidget(btn_reset_phy)
+        
         # 4. 發布與控制
         
         # [新增] 發布按鈕
@@ -192,6 +255,7 @@ class ControlWindow(QMainWindow):
         ctrl_layout.addWidget(prize_group)
         ctrl_layout.addWidget(list_group)
         ctrl_layout.addWidget(presenter_btn)
+        ctrl_layout.addWidget(physics_group) # [新增] 加入阻力控制面板
         ctrl_layout.addWidget(publish_btn)
         ctrl_layout.addStretch()
         ctrl_layout.addWidget(close_sys_btn)
@@ -280,6 +344,39 @@ class ControlWindow(QMainWindow):
         if self.display_window.isVisible():
             pixmap = self.display_window.grab()
             self.live_monitor_label.setPixmap(pixmap)
+
+    def update_physics_params(self):
+        """[物理參數] 滑桿數值改變時觸發"""
+        # 1. Base Friction Mapping: 0~100 -> 0.950~0.999
+        val_base = self.slider_base.value()
+        base_f = 0.950 + (val_base / 100.0) * (0.999 - 0.950)
+        
+        # 2. Peg Friction Mapping: 0~100 -> 0.50~0.95
+        val_peg = self.slider_peg.value()
+        peg_f = 0.50 + (val_peg / 100.0) * (0.95 - 0.50)
+        
+        # Update Labels
+        self.lbl_base_val.setText(f"{base_f:.2f}")
+        self.lbl_peg_val.setText(f"{peg_f:.2f}")
+        
+        # Apply to Display Window (Audience)
+        if hasattr(self.display_window, 'wheel'):
+            self.display_window.wheel.base_friction = base_f
+            self.display_window.wheel.peg_friction = peg_f
+            
+        # Also Apply to Preview Wheel (Operator)
+        self.preview_wheel.base_friction = base_f
+        self.preview_wheel.peg_friction = peg_f
+
+    def reset_physics_params(self):
+        """[物理參數] 恢復預設值"""
+        # 預設值: Base=0.990, Peg=0.850
+        # 反推 Slider 值
+        # 0.990 = 0.95 + x * 0.049  => x ~= 0.816 -> 82
+        # 0.850 = 0.50 + y * 0.45   => y ~= 0.777 -> 78
+        self.slider_base.setValue(82)
+        self.slider_peg.setValue(78)
+        self.update_physics_params() # Apply
 
     def setup_style(self):
         # 設定全域 MessageBox 樣式
