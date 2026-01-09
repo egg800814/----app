@@ -158,8 +158,20 @@ class ControlWindow(QMainWindow):
         pg_layout = QVBoxLayout(prize_group)
         
         self.prize_combo = QComboBox()
+        # [修改] 加大下拉選單文字大小
+        self.prize_combo.setStyleSheet("""
+            QComboBox { font-size: 16px; padding: 5px; }
+            QComboBox QAbstractItemView {
+                font-size: 20px; 
+                padding: 10px;
+                background-color: white;
+                color: black;
+                selection-background-color: #3498db;
+            }
+        """)
         self.prize_combo.addItems(self.prizes)
-        self.prize_combo.setCurrentIndex(self.current_prize_idx) # [修改] 使用讀取的索引
+        # self.prize_combo.setCurrentIndex(self.current_prize_idx) # [修改] 不使用讀取的索引
+        self.prize_combo.setCurrentIndex(-1) # [修改] 預設不選取任何獎項
         self.prize_combo.currentIndexChanged.connect(self.update_preview_content)
         
         edit_prize_btn = QPushButton("✏️ 修改")
