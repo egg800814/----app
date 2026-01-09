@@ -33,7 +33,7 @@ class ControlWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("後台控制系統 - 90週年尾牙")
-        self.resize(1200, 800) # 可縮放，預設大小
+        self.resize(1400, 900) # [修改] 加大視窗尺寸
         
         # 音效
         self.win_sound = QSoundEffect()
@@ -110,7 +110,7 @@ class ControlWindow(QMainWindow):
         
         # --- 左側：控制面板 ---
         control_panel = QFrame()
-        control_panel.setFixedWidth(400)
+        control_panel.setFixedWidth(550) # [修改] 加寬控制面板
         control_panel.setStyleSheet("""
             QFrame { background-color: #34495e; color: white; }
             QLabel { color: bdfeff; font-weight: bold; font-size: 16px; font-family: "Microsoft JhengHei"; }
@@ -285,16 +285,15 @@ class ControlWindow(QMainWindow):
         
         # 預覽用的轉盤
         self.preview_wheel = LuckyWheelWidget()
-        # [修正] 移除固定大小，改成自適應縮放
-        self.preview_wheel.setMinimumSize(500, 500) 
+        # [修正] 移除固定大小，改成自適應縮放 (設定最小尺寸即可，讓它能隨視窗放大縮小)
+        self.preview_wheel.setMinimumSize(300, 300) 
         self.preview_wheel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         # 為了保持預覽轉盤居中
         wheel_container = QWidget()
         wc_layout = QHBoxLayout(wheel_container)
-        wc_layout.addStretch()
+        wc_layout.setContentsMargins(0, 0, 0, 0) # [新增] 移除邊距以最大化顯示
         wc_layout.addWidget(self.preview_wheel)
-        wc_layout.addStretch()
         
         # 在系統端的開始按鈕
         self.sys_spin_btn = QPushButton("🎰 START (系統端啟動)")
