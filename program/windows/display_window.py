@@ -27,7 +27,8 @@ class DisplayWindow(QWidget):
     - 轉盤(左) + 得獎名單(右)
     - 兩段式揭曉與動態特效
     """
-    requestSpin = pyqtSignal()
+    requestSpin = pyqtSignal() # 保留給其他用途，或相容性
+    spinStarted = pyqtSignal() # [新增] 通知主控端轉動開始 (鎖定UI)
     
     def __init__(self):
         super().__init__()
@@ -202,7 +203,6 @@ class DisplayWindow(QWidget):
         
         # 轉盤
         self.wheel = LuckyWheelWidget()
-        
         # 開始按鈕 (設為浮動，不放入 Layout 以免影響轉盤大小)
         self.spin_btn = QPushButton("開始抽獎", self) 
         self.spin_btn.setFixedSize(200, 80)
@@ -214,8 +214,14 @@ class DisplayWindow(QWidget):
             }
             QPushButton:hover { background-color: #ff6b6b; }
             QPushButton:pressed { background-color: #a93226; }
+            QPushButton:disabled { background-color: #95a5a6; border-color: #bdc3c7; }
         """)
-        self.spin_btn.clicked.connect(self.requestSpin.emit)
+        # [修改] 改為長按互動邏輯
+        self.spin_btn.pressed.connect(self.on_btn_pressed)
+        # self.spin_btn.released.connect(self.on_btn_released) # [修改] 移除標準信號，改由 eventFilter 全權處理
+        
+        # [新增] 安裝事件過濾器以處理「按住後移出按鈕外放開」的情況
+        self.spin_btn.installEventFilter(self)
         
         # ---------------------------------------------------------
         # [按鈕位置設定]
@@ -278,6 +284,32 @@ class DisplayWindow(QWidget):
         # Add to main layout
         main_layout.addWidget(self.left_container, 7)
         main_layout.addWidget(self.right_container, 3)
+
+    def eventFilter(self, obj, event):
+        """處理按鈕的特殊事件 (例如移出邊界後放開)"""
+        if obj == self.spin_btn:
+            if event.type() == QEvent.MouseButtonRelease:
+                # 無論滑鼠是否在按鈕內，只要放開左鍵，都視為結束長按
+                # 判斷是否為左鍵
+                if event.button() == Qt.LeftButton:
+                    self.on_btn_released()
+                    return True # 事件已處理
+        return super().eventFilter(obj, event)
+
+    def on_btn_pressed(self):
+        """按下按鈕：開始轉動 (加速)"""
+        # 進入專注模式 (變暗背景等)
+        self.set_focus_mode(True)
+        # 開始轉動
+        self.wheel.start_holding()
+        # 通知控制端鎖定按鈕
+        self.spinStarted.emit()
+
+    def on_btn_released(self):
+        """放開按鈕：停止加速 (進入物理減速)"""
+        self.wheel.release_holding()
+        # 防止再次按下 (一次性互動)
+        self.spin_btn.setEnabled(False)
         
     def update_btn_pos(self):
         """[絕對定位] 根據目前的 x, y 與 左側容器位置，計算按鈕座標"""

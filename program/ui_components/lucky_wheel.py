@@ -76,6 +76,10 @@ class LuckyWheelWidget(QWidget):
 
         # 震動特效偏移量
         self.shake_offset = QPoint(0, 0)
+        
+        # [新增] 長按互動旗標
+        self.is_holding = False
+        self.max_speed = 50.0
 
     def _load_loop_sound(self, filename):
         if os.path.exists(filename):
@@ -145,6 +149,7 @@ class LuckyWheelWidget(QWidget):
         if self.snd_medium: self.snd_medium.setVolume(1.0 if mode == 'medium' else 0.0)
         if self.snd_slow: self.snd_slow.setVolume(1.0 if mode == 'slow' else 0.0)
 
+    # [保留 for 相容性] 瞬間啟動 (系統端可能會用到，或者作為 Fallback)
     def start_spin(self, initial_speed=None):
         if not self.items or self.is_spinning:
             return
@@ -155,8 +160,45 @@ class LuckyWheelWidget(QWidget):
              self.rotation_speed = random.uniform(25, 40)
              
         self.is_spinning = True
+        self.is_holding = False # 確保不是 Holding 模式
         
         # [預先啟動所有循環音效] 以音量控制切換，避免播放時 lag
+        self._start_loop_sounds()
+        
+        # 初始狀態通常是 fast (如果速度夠快)
+        initial_mode = 'fast' if self.rotation_speed > 20 else 'tick'
+        self._update_sound_volumes(initial_mode)
+        self.current_sound_mode = initial_mode
+        
+        self.timer.start(10)
+
+    # [新增] 按下按鈕：開始加速旋轉
+    def start_holding(self):
+        if not self.items: return
+        if self.is_spinning and not self.is_holding: return # 已經在跑且不是 holding 狀態，忽略
+        
+        self.is_spinning = True
+        self.is_holding = True
+        
+        # 若是剛開始，速度歸零開始加速
+        if not self.timer.isActive():
+             self.rotation_speed = 0
+             self._start_loop_sounds()
+             self.timer.start(10)
+             
+    # [新增] 放開按鈕：進入減速模式
+    def release_holding(self):
+        if self.is_holding:
+            self.is_holding = False
+            
+            # [修正] 避免按太快導致速度不夠就停了
+            # 如果放開時速度還太慢（例如點一下就放開），強制給予一個基礎初速
+            if self.rotation_speed < 30.0:
+                self.rotation_speed = random.uniform(30.0, 40.0)
+            
+            # 此時 rotation_speed 應該已經很快，接下來交給 update_spin 的物理邏輯去減速
+
+    def _start_loop_sounds(self):
         if self.snd_fast: 
             self.snd_fast.setVolume(0)
             self.snd_fast.play()
@@ -166,15 +208,40 @@ class LuckyWheelWidget(QWidget):
         if self.snd_slow: 
             self.snd_slow.setVolume(0)
             self.snd_slow.play()
-        
-        # 初始狀態通常是 fast (如果速度夠快)
-        initial_mode = 'fast' if self.rotation_speed > 20 else 'tick'
-        self._update_sound_volumes(initial_mode)
-        self.current_sound_mode = initial_mode
-        
-        self.timer.start(10) # [修正] 提高更新頻率，讓動畫更流暢 (原本16ms=60fps, 10ms=100fps) 
 
     def update_spin(self):
+        # [修改] 1. 長按加速邏輯
+        if self.is_holding:
+            # 加速直到 Max Speed
+            if self.rotation_speed < self.max_speed:
+                self.rotation_speed += 0.8 # 加速度
+            else:
+                self.rotation_speed = self.max_speed
+            
+            # 旋轉更新 (此時不受物理擋板影響，全力衝刺)
+            self.current_angle += self.rotation_speed
+            self.current_angle %= 360
+            
+            # 聲音更新
+            abs_speed = abs(self.rotation_speed)
+            target_mode = 'fast' if abs_speed > 20 else ('medium' if abs_speed > 8 else 'tick')
+            if target_mode != self.current_sound_mode:
+                self._update_sound_volumes(target_mode)
+                self.current_sound_mode = target_mode
+                
+            # 仍然要更新 last_sector_index 避免放開瞬間 index 亂跳
+            n = len(self.items)
+            if n > 0:
+                slice_angle = 360 / n
+                relative_angle = (270 - self.current_angle) % 360
+                self.last_sector_index = int(relative_angle / slice_angle)
+            
+            return # [跳出] 長按時不執行減速/擋板物理
+            
+        # -------------------------------------------------------------------------
+        # 以下為原本的物理減速邏輯 (放開按鈕後執行)
+        # -------------------------------------------------------------------------
+
         self.current_angle += self.rotation_speed
         self.current_angle %= 360
 

@@ -95,7 +95,10 @@ class ControlWindow(QMainWindow):
             self.display_window.showFullScreen()
         
         # 連接大螢幕的開始信號
-        self.display_window.requestSpin.connect(self.master_start_spin)
+        # self.display_window.requestSpin.connect(self.master_start_spin) # [移除] 舊的單擊邏輯
+        
+        # [新增] 監聽大螢幕轉動開始 (長按開始)
+        self.display_window.spinStarted.connect(self.on_remote_spin_started)
         
         # 若是關閉系統視窗，連同大螢幕一起關閉
         # 透過 closeEvent 處理
@@ -603,6 +606,11 @@ class ControlWindow(QMainWindow):
             msg.setText(f"【{current_prize}】的抽獎人已更新 (請記得發布到大螢幕)")
             msg.setIcon(QMessageBox.NoIcon)
             msg.exec_()
+
+    def on_remote_spin_started(self):
+        """當大螢幕開始轉動 (長按) 時，鎖定系統端按鈕"""
+        self.sys_spin_btn.setEnabled(False)
+        self.display_window.spin_btn.setEnabled(False) # 確保這裡也鎖定
 
     def master_start_spin(self):
         """主控端與顯示端同步啟動"""
