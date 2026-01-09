@@ -9,6 +9,7 @@ control_window.py
       4. 流程控制：發布設定至大螢幕、觸發抽獎、確認中獎人歸檔。
 """
 import os
+import json # [新增] JSON 用於存檔
 import random
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -49,6 +50,18 @@ class ControlWindow(QMainWindow):
         ]
         self.prize_avatars = {}
         
+        # 預設名單
+        self.list_content = (
+            "許惠英副總\n"
+            "陳逸人\n林宛萩\n黃聖文\n陳淑萍\n陳瑞雯\n洪立恩\n蔡沛容\n林聖家\n"
+            "張書友\n譚文男\n邱振威\n莊達富\n顏宏光\n黃智傑\n簡鴻彬\n楊浩智\n李承哲\n李哲旭\n許漢德\n徐明億\n吳敬霆\n"
+            "黃珮珊\n楊麗玉\n江辰平\n范孝慈\n陳妍淇\n張芮溱"
+        )
+        self.current_prize_idx = -1
+        
+        # [新增] 讀取存檔
+        self.load_data()
+        
         # 初始化大螢幕視窗
         self.display_window = DisplayWindow()
         self.display_window.show() # 開啟第二視窗 (通常會出現在第二螢幕，若無則重疊)
@@ -81,6 +94,8 @@ class ControlWindow(QMainWindow):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
+            # [新增] 關閉前自動存檔
+            self.save_data()
             self.display_window.close()
             event.accept()
         else:
@@ -120,20 +135,25 @@ class ControlWindow(QMainWindow):
         
         self.prize_combo = QComboBox()
         self.prize_combo.addItems(self.prizes)
-        self.prize_combo.setCurrentIndex(-1) # [修改] 預設不選擇任何獎項
+        self.prize_combo.setCurrentIndex(self.current_prize_idx) # [修改] 使用讀取的索引
         self.prize_combo.currentIndexChanged.connect(self.update_preview_content)
         
-        edit_prize_btn = QPushButton("✏️ 修改名稱")
+        edit_prize_btn = QPushButton("✏️ 修改")
         edit_prize_btn.clicked.connect(self.edit_prize)
+        
+        delete_prize_btn = QPushButton("🗑️ 刪除")
+        delete_prize_btn.setStyleSheet("background-color: #c0392b;")
+        delete_prize_btn.clicked.connect(self.delete_prize)
         
         combo_layout = QHBoxLayout()
         combo_layout.setContentsMargins(0, 0, 0, 0)
-        combo_layout.addWidget(self.prize_combo, 2)
+        combo_layout.addWidget(self.prize_combo, 3)
         combo_layout.addWidget(edit_prize_btn, 1)
+        combo_layout.addWidget(delete_prize_btn, 1)
         
         self.new_prize_input = QLineEdit()
         self.new_prize_input.setPlaceholderText("輸入新獎項...")
-        add_prize_btn = QPushButton("➕ 追加獎項")
+        add_prize_btn = QPushButton("➕ 追加新獎項")
         add_prize_btn.clicked.connect(self.add_prize)
         
         pg_layout.addLayout(combo_layout)
@@ -145,12 +165,7 @@ class ControlWindow(QMainWindow):
         lg_layout = QVBoxLayout(list_group)
         
         self.list_edit = QTextEdit()
-        self.list_edit.setPlainText(
-            "許惠英副總\n"
-            "陳逸人\n林宛萩\n黃聖文\n陳淑萍\n陳瑞雯\n洪立恩\n蔡沛容\n林聖家\n"
-            "張書友\n譚文男\n邱振威\n莊達富\n顏宏光\n黃智傑\n簡鴻彬\n楊浩智\n李承哲\n李哲旭\n許漢德\n徐明億\n吳敬霆\n"
-            "黃珮珊\n楊麗玉\n江辰平\n范孝慈\n陳妍淇\n張芮溱"
-        )
+        self.list_edit.setPlainText(self.list_content) # [修改] 使用讀取的名單
         
         shuffle_btn = QPushButton("🔀 打散名單排序")
         shuffle_btn.setStyleSheet("background-color: #2980b9; margin-top: 5px;")
@@ -378,6 +393,65 @@ class ControlWindow(QMainWindow):
         self.slider_peg.setValue(78)
         self.update_physics_params() # Apply
 
+    # -------------------------------------------------------------
+    # 資料存取 (Save/Load)
+    # -------------------------------------------------------------
+    def get_data_file_path(self):
+        # 存放在執行檔/腳本的同級目錄下
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # program/.. = 專案根目錄
+        return os.path.join(base_dir, "data.json")
+
+    def save_data(self):
+        """將目前的設定寫入 JSON"""
+        data = {
+            "prizes": self.prizes,
+            "prize_avatars": self.prize_avatars,
+            "list_content": self.list_edit.toPlainText(),
+            "current_prize_idx": self.prize_combo.currentIndex()
+        }
+        
+        try:
+            target_file = self.get_data_file_path()
+            with open(target_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            print(f"[Save] 資料已儲存至 {target_file}")
+        except Exception as e:
+            print(f"[Save Error] 存檔失敗: {e}")
+            QMessageBox.critical(self, "存檔錯誤", f"無法儲存設定檔案：\n{e}")
+
+    def load_data(self):
+        """從 JSON 讀取設定 (若無則使用預設值)"""
+        target_file = self.get_data_file_path()
+        if not os.path.exists(target_file):
+            print("[Load] 找不到存檔，使用預設值")
+            return
+            
+        try:
+            with open(target_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 讀取並防呆 (若 key 不存在則維持預設)
+            if "prizes" in data and isinstance(data["prizes"], list):
+                self.prizes = data["prizes"]
+                
+            if "prize_avatars" in data and isinstance(data["prize_avatars"], dict):
+                self.prize_avatars = data["prize_avatars"]
+                
+            if "list_content" in data and isinstance(data["list_content"], str):
+                self.list_content = data["list_content"]
+                
+            if "current_prize_idx" in data:
+                self.current_prize_idx = int(data["current_prize_idx"])
+                
+            print(f"[Load] 成功載入資料: {target_file}")
+            
+        except Exception as e:
+            print(f"[Load Error] 讀檔失敗，使用預設值: {e}")
+            # 不阻擋程式開啟，僅顯示錯誤在 Console
+
     def setup_style(self):
         # 設定全域 MessageBox 樣式
         self.setStyleSheet(self.styleSheet() + """
@@ -434,7 +508,34 @@ class ControlWindow(QMainWindow):
                 self.prize_avatars[new_name] = self.prize_avatars.pop(old_name)
                 
             self.update_preview_content()
+            self.save_data() # [新增] 自動存檔
             QMessageBox.information(self, "成功", "獎項名稱已修改！")
+
+    def delete_prize(self):
+        """刪除目前選中的獎項"""
+        current_index = self.prize_combo.currentIndex()
+        if current_index < 0: return
+        
+        prize_name = self.prizes[current_index]
+        
+        reply = QMessageBox.question(self, "刪除獎項", 
+                                     f"確定要刪除獎項【{prize_name}】嗎？\n(這也會刪除其關聯的頭像設定)",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            # Remove from list
+            self.prizes.pop(current_index)
+            # Remove from combobox
+            self.prize_combo.removeItem(current_index)
+            
+            # Remove avatar if exists
+            if prize_name in self.prize_avatars:
+                del self.prize_avatars[prize_name]
+                
+            self.update_preview_content()
+            self.save_data() # [新增] 自動存檔
+            
+            QMessageBox.information(self, "成功", "獎項已刪除！")
 
     def add_prize(self):
         text = self.new_prize_input.text().strip()
@@ -443,6 +544,9 @@ class ControlWindow(QMainWindow):
             self.prize_combo.addItem(text)
             self.prize_combo.setCurrentText(text)
             self.new_prize_input.clear()
+            
+            self.save_data() # [新增] 自動存檔
+            
             msg = QMessageBox(self)
             msg.setWindowTitle("成功")
             msg.setText("獎項已追加！")
