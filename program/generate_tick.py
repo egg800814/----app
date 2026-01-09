@@ -1,3 +1,10 @@
+"""
+generate_tick.py
+----------------
+描述：音效生成工具腳本。
+功能：利用數學公式合成音訊波形，生成抽獎程式所需的 .wav 音效檔案 (如轉盤滴答聲、背景循環音效、勝利號角等)。
+      若 assets/sounds 資料夾遺失，可直接執行此程式重新產生。
+"""
 import wave
 import random
 import struct

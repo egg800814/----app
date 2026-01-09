@@ -1,3 +1,12 @@
+"""
+effects.py
+----------
+描述：視覺特效元件庫。
+功能：包含應用程式中使用的各種裝飾性特效元件：
+      1. ConfettiWidget: 慶祝彩帶/紙花飄落特效。
+      2. WinnerOverlay: 中獎時彈出的全螢幕遮罩 (顯示獎項與得主)。
+      3. FlyingLabel: 名字飛入名單的過渡動畫標籤。
+"""
 import random
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QGraphicsOpacityEffect
 from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve

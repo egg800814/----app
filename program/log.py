@@ -1,7 +1,12 @@
 """
-分級分流日誌模組 (log.py)
-
-功能：將重複邏輯提取到核心函式中，實現 DRY 原則。
+log.py
+------
+描述：分級分流日誌模組。
+功能：提供統一的 Log 寫入介面，將系統運作紀錄分為三類：
+      1. ERROR: 應用程式錯誤 (含 Traceback)
+      2. COMM:  通訊/連線相關紀錄
+      3. INFO:  一般業務流程與操作紀錄
+      日誌檔案會依日期自動存入 `log_files/` 對應子資料夾中。
 """
 from datetime import datetime
 import traceback

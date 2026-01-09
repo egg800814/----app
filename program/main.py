@@ -1,3 +1,9 @@
+"""
+main.py
+-------
+描述：應用程式進入點 (Entry Point)。
+功能：負責初始化 QApplication，設定全域字型，並啟動主要的「後台控制視窗」(ControlWindow)。
+"""
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
