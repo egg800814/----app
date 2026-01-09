@@ -20,6 +20,7 @@ from PyQt5.QtGui import QPixmap, QCursor, QImage
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QVariantAnimation, QEasingCurve, QTimer, QEvent, QThread
 from ui_components.lucky_wheel import LuckyWheelWidget
 from ui_components.effects import ConfettiWidget, WinnerOverlay, FlyingLabel
+from ui_components.photo_selector import PhotoSelectorOverlay # [新增]
 
 class DisplayWindow(QWidget):
     """
@@ -29,7 +30,8 @@ class DisplayWindow(QWidget):
     """
     requestSpin = pyqtSignal() # 保留給其他用途，或相容性
     spinStarted = pyqtSignal() # [新增] 通知主控端轉動開始 (鎖定UI)
-    
+    avatarUpdated = pyqtSignal(str) # [新增] 通知主控端已選擇新照片
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("大螢幕抽獎")
@@ -37,8 +39,12 @@ class DisplayWindow(QWidget):
         # Overlay and Confetti (Initialize early)
         self.overlay = WinnerOverlay(self)
         self.confetti = ConfettiWidget(self)
+        self.photo_selector = PhotoSelectorOverlay(self) # [新增] 照片選擇器
+        self.photo_selector.photoSelected.connect(self.on_photo_selected)
+        
         self.overlay.hide()
         self.confetti.hide()
+        self.photo_selector.hide()
         
         # [新增] 初始化飛行動畫屬性
         self.fly_anim = None
@@ -422,11 +428,25 @@ class DisplayWindow(QWidget):
         if hasattr(self, 'cursor_fol_label'):
              self.cursor_fol_label.raise_()
         
-        # [新增] 視窗大小改變時，重新計算按鈕位置
         if hasattr(self, 'spin_btn'):
             self.update_btn_pos()
             
+        if hasattr(self, 'photo_selector'):
+            self.photo_selector.resize(self.size())
+            
         super().resizeEvent(event)
+
+    def show_photo_selector(self):
+        """顯示照片選擇器 (由控制端觸發)"""
+        self.photo_selector.show_selector()
+
+    def on_photo_selected(self, path):
+        """當在大螢幕選完照片後"""
+        print(f"[Display] Photo selected: {path}")
+        # 更新轉盤
+        self.wheel.set_presenter_avatar(path)
+        # 通知控制端 (以便存檔與同步)
+        self.avatarUpdated.emit(path)
 
     def update_prize_name(self, prize_name):
         self.prize_label.setText(prize_name)

@@ -99,6 +99,8 @@ class ControlWindow(QMainWindow):
         
         # [新增] 監聽大螢幕轉動開始 (長按開始)
         self.display_window.spinStarted.connect(self.on_remote_spin_started)
+        # [新增] 監聽大螢幕選人結果
+        self.display_window.avatarUpdated.connect(self.on_remote_avatar_updated)
         
         # 若是關閉系統視窗，連同大螢幕一起關閉
         # 透過 closeEvent 處理
@@ -219,9 +221,17 @@ class ControlWindow(QMainWindow):
         lg_layout.addLayout(btns_layout)
         
         # 3. 抽獎人設定
-        presenter_btn = QPushButton("📷 設定此獎項抽獎人頭像")
+        presenter_btn = QPushButton("📷 從電腦選擇照片")
         presenter_btn.setStyleSheet("background-color: #e67e22;")
         presenter_btn.clicked.connect(self.load_avatar)
+        
+        remote_select_btn = QPushButton("🖥️ 開啟大螢幕選人模式")
+        remote_select_btn.setStyleSheet("background-color: #8e44ad; margin-top: 5px;")
+        remote_select_btn.clicked.connect(self.open_remote_selector)
+        
+        # [修正] 將按鈕加入 Layout (之前遺漏)
+        pg_layout.addWidget(presenter_btn)
+        pg_layout.addWidget(remote_select_btn)
         
         # [新增] 轉速與阻力微調區
         physics_group = QGroupBox("⚙️ 轉速與阻力微調")
@@ -630,11 +640,30 @@ class ControlWindow(QMainWindow):
             self.prize_avatars[current_prize] = fname
             
             self.update_preview_content()
-            msg = QMessageBox(self)
-            msg.setWindowTitle("設定成功")
-            msg.setText(f"【{current_prize}】的抽獎人已更新 (請記得發布到大螢幕)")
-            msg.setIcon(QMessageBox.NoIcon)
             msg.exec_()
+
+    def open_remote_selector(self):
+        """開啟大螢幕的照片選擇器"""
+        self.display_window.show_photo_selector()
+
+    def on_remote_avatar_updated(self, path):
+        """當大螢幕選完照片後，同步回傳"""
+        current_prize = self.prize_combo.currentText()
+        if not current_prize:
+             QMessageBox.warning(self, "錯誤", "請先選擇一個獎項，才能設定頭像")
+             return
+             
+        # 存入字典
+        self.prize_avatars[current_prize] = path
+        
+        # 更新即時預覽
+        self.update_preview_content()
+        
+        # 自動存檔
+        self.save_data()
+        
+        QMessageBox.information(self, "更新成功", 
+                                f"已為【{current_prize}】設定新頭像！\n路徑: {os.path.basename(path)}")
 
     def on_remote_spin_started(self):
         """當大螢幕開始轉動 (長按) 時，鎖定系統端按鈕"""
