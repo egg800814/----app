@@ -31,6 +31,7 @@ class DisplayWindow(QWidget):
     requestSpin = pyqtSignal() # 保留給其他用途，或相容性
     spinStarted = pyqtSignal() # [新增] 通知主控端轉動開始 (鎖定UI)
     avatarUpdated = pyqtSignal(str) # [新增] 通知主控端已選擇新照片
+    wheelReady = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -178,22 +179,19 @@ class DisplayWindow(QWidget):
 
 
 
-        # 全螢幕設定
-        self.showFullScreen()
-        
-        if os.path.exists("background_display.jpg"):
-             self.setStyleSheet(f"DisplayWindow {{ border-image: url(background_display.jpg) 0 0 0 0 stretch stretch; }}")
-        else:
-             self.setStyleSheet("background-color: #2c3e50;")
-
         # Main Layout (Horizontal)
+        if os.path.exists("background_display.jpg"):
+            self.setStyleSheet(f"DisplayWindow {{ border-image: url(background_display.jpg) 0 0 0 0 stretch stretch; }}")
+        else:
+            self.setStyleSheet("background-color: #2c3e50;")
+
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
-        
+
         # --- LEFT SIDE: Wheel & Title ---
         self.left_container = QWidget()
-        left_layout = QVBoxLayout(self.left_container)
-        
+        self.left_layout = QVBoxLayout(self.left_container)
+
         # 頂部：目前抽獎項目標題
         self.prize_label = QLabel("🎉 MDIT 尾牙抽獎活動準備中 🎉")
         self.prize_label.setAlignment(Qt.AlignCenter)
@@ -206,11 +204,14 @@ class DisplayWindow(QWidget):
                 margin-bottom: 20px;
             }
         """)
-        
-        # 轉盤
-        self.wheel = LuckyWheelWidget()
+
+        # 轉盤 (attempt immediate creation; if it fails we'll create later)
+        try:
+            self.wheel = LuckyWheelWidget()
+        except Exception:
+            self.wheel = None
         # 開始按鈕 (設為浮動，不放入 Layout 以免影響轉盤大小)
-        self.spin_btn = QPushButton("開始抽獎", self) 
+        self.spin_btn = QPushButton("開始抽獎", self)
         self.spin_btn.setFixedSize(200, 80)
         self.spin_btn.setCursor(Qt.PointingHandCursor)
         self.spin_btn.setStyleSheet("""
@@ -225,10 +226,10 @@ class DisplayWindow(QWidget):
         # [修改] 改為長按互動邏輯
         self.spin_btn.pressed.connect(self.on_btn_pressed)
         # self.spin_btn.released.connect(self.on_btn_released) # [修改] 移除標準信號，改由 eventFilter 全權處理
-        
+
         # [新增] 安裝事件過濾器以處理「按住後移出按鈕外放開」的情況
         self.spin_btn.installEventFilter(self)
-        
+
         # ---------------------------------------------------------
         # [按鈕位置設定]
         # 若要修改按鈕位置，請調整以下兩個數值：
@@ -238,13 +239,14 @@ class DisplayWindow(QWidget):
         self.current_offset_x = 1000
         self.current_margin_bottom = 150
         # ---------------------------------------------------------
-        
+
         # 初始定位
         QTimer.singleShot(0, self.update_btn_pos)
-        
-        left_layout.addWidget(self.prize_label)
-        left_layout.addWidget(self.wheel, 1)
-        
+
+        self.left_layout.addWidget(self.prize_label)
+        if hasattr(self, 'wheel') and self.wheel is not None:
+            self.left_layout.addWidget(self.wheel, 1)
+
         # --- RIGHT SIDE: Winner List ---
         self.right_container = QWidget()
         self.right_container.setFixedWidth(350)
@@ -256,11 +258,11 @@ class DisplayWindow(QWidget):
             }
         """)
         right_layout = QVBoxLayout(self.right_container)
-        
+
         lbl_list_title = QLabel("🏆 榮譽榜")
         lbl_list_title.setAlignment(Qt.AlignCenter)
         lbl_list_title.setStyleSheet("color: #f1c40f; font-size: 32px; font-weight: bold; padding: 10px; background: transparent; border: none;")
-        
+
         self.winner_list = QListWidget()
         self.winner_list.setFocusPolicy(Qt.NoFocus)
         self.winner_list.setStyleSheet("""
@@ -283,13 +285,18 @@ class DisplayWindow(QWidget):
                 color: #f1c40f;
             }
         """)
-        
         right_layout.addWidget(lbl_list_title)
         right_layout.addWidget(self.winner_list)
-        
+
         # Add to main layout
         main_layout.addWidget(self.left_container, 7)
         main_layout.addWidget(self.right_container, 3)
+
+        # 全螢幕設定
+        self.showFullScreen()
+
+        # Ensure the wheel exists (deferred init will create and add if missing)
+        QTimer.singleShot(50, self.ensure_wheel_initialized)
 
     def eventFilter(self, obj, event):
         """處理按鈕的特殊事件 (例如移出邊界後放開)"""
@@ -301,6 +308,35 @@ class DisplayWindow(QWidget):
                     self.on_btn_released()
                     return True # 事件已處理
         return super().eventFilter(obj, event)
+
+    def ensure_wheel_initialized(self):
+        """Ensure `self.wheel` exists and is added to the left layout. Emits `wheelReady` when ready."""
+        try:
+            if hasattr(self, 'wheel') and self.wheel is not None:
+                # already initialized
+                return True
+
+            # create wheel and insert into left layout
+            self.wheel = LuckyWheelWidget()
+            # add to left layout (ensure attribute exists)
+            if hasattr(self, 'left_layout'):
+                self.left_layout.addWidget(self.wheel, 1)
+
+            # position adjustments
+            try:
+                QTimer.singleShot(0, self.update_btn_pos)
+            except Exception:
+                pass
+
+            # notify listeners
+            try:
+                self.wheelReady.emit()
+            except Exception:
+                pass
+
+            return True
+        except Exception:
+            return False
 
     def on_btn_pressed(self):
         """按下按鈕：開始轉動 (加速)"""
@@ -319,10 +355,20 @@ class DisplayWindow(QWidget):
         
     def update_btn_pos(self):
         """[絕對定位] 根據目前的 x, y 與 左側容器位置，計算按鈕座標"""
-        # 確保 spin_btn 在最上層且顯示
-        self.spin_btn.show()
-        self.spin_btn.raise_()
+        # 確保 spin_btn 在最上層且顯示，但如果照片選擇 overlay 正在顯示，避免把按鈕蓋在 overlay 之上
+        if hasattr(self, 'spin_btn'):
+            # only show/raise if photo selector not visible
+            if not (hasattr(self, 'photo_selector') and self.photo_selector.isVisible()):
+                self.spin_btn.show()
+                self.spin_btn.raise_()
+            else:
+                # still ensure button is shown but do not raise above overlay
+                self.spin_btn.show()
         
+        # 如果沒有 spin_btn（尚未建立），直接離開
+        if not hasattr(self, 'spin_btn'):
+            return
+
         # 取得左側容器的中心點 X
         # 注意：在程式剛啟動時 geometry 可能尚未完全確定，使用 resizeEvent 修正
         if hasattr(self, 'left_container'):
@@ -330,7 +376,7 @@ class DisplayWindow(QWidget):
             center_x = container_geo.center().x()
         else:
             center_x = self.width() * 0.35 # 粗略估計
-            
+
         btn_w = self.spin_btn.width()
         btn_h = self.spin_btn.height()
         
@@ -461,9 +507,10 @@ class DisplayWindow(QWidget):
 
     def update_cursor_position(self):
         """定時更新 Logo 位置與層級"""
-        # [修正] 確保按鈕在最上層
+        # [修正] 確保按鈕在最上層，但當照片選擇 overlay 顯示時，不要把按鈕抬到 overlay 之上
         if hasattr(self, 'spin_btn') and self.spin_btn.isVisible():
-            self.spin_btn.raise_()
+            if not (hasattr(self, 'photo_selector') and self.photo_selector.isVisible()):
+                self.spin_btn.raise_()
             
         if hasattr(self, 'cursor_fol_label') and self.cursor_fol_label.isVisible():
             # 1. 強制置頂

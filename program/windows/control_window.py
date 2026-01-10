@@ -385,19 +385,37 @@ class ControlWindow(QMainWindow):
         layout.addWidget(control_panel, 1)
         layout.addWidget(preview_panel, 2)
 
-        # 連接【大螢幕】轉盤的結束信號 (即使系統端不轉，邏輯由大螢幕觸發)
-        self.display_window.wheel.spinFinished.connect(self.on_spin_finished)
+        # 連接【大螢幕】轉盤的結束信號 (若 wheel 尚未建立，使用延遲嘗試連線)
+        def _setup_wheel_connections():
+            try:
+                if hasattr(self.display_window, 'wheel') and self.display_window.wheel is not None:
+                    self.display_window.wheel.spinFinished.connect(self.on_spin_finished)
+                    # 初始化預覽數據
+                    self.update_preview_list()
+                    # 一開始就先同步名單到大螢幕 (不需按發布)
+                    self.display_window.wheel.set_items(self.list_edit.toPlainText())
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # 立即嘗試，若失敗則在 200ms 後再嘗試一次（最多幾次）
+        if not _setup_wheel_connections():
+            # 如果 DisplayWindow 提供 wheelReady 訊號，利用該訊號立即連線
+            try:
+                if hasattr(self.display_window, 'wheelReady'):
+                    self.display_window.wheelReady.connect(lambda: _setup_wheel_connections())
+            except Exception:
+                pass
+            attempt = {'count': 0}
+            def _retry():
+                attempt['count'] += 1
+                if _setup_wheel_connections() or attempt['count'] > 10:
+                    return
+                QTimer.singleShot(200, _retry)
+            QTimer.singleShot(200, _retry)
         
-        # 初始化預覽數據
-        self.update_preview_list()
-        
-        # [新增] 一開始就先同步名單到大螢幕 (不需按發布)
-        self.display_window.wheel.set_items(self.list_edit.toPlainText())
-        
-        # [新增] 即時監控 Timer
-        self.monitor_timer = QTimer(self)
-        self.monitor_timer.timeout.connect(self.update_live_monitor)
-        self.monitor_timer.start(1000) # 每 1000ms 更新一次 (降低資源消耗)
+        # 即時監控 Timer (已於 __init__ 建立，這裡不重複建立)
 
     def update_live_monitor(self):
         """定期截圖大螢幕並顯示在監控區"""
