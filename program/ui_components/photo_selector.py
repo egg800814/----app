@@ -4,54 +4,111 @@ from PyQt5.QtWidgets import (QWidget, QApplication, QVBoxLayout, QGridLayout, QL
                              QScrollArea, QPushButton, QFrame, QGraphicsOpacityEffect, QGraphicsDropShadowEffect)
 from PyQt5.QtGui import QPixmap, QCursor, QPainter, QPainterPath, QColor
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QEvent
+from PyQt5.QtCore import QPropertyAnimation
 
-class ClickableLabel(QLabel):
-    clicked = pyqtSignal(str) # emit path
+# -----------------------------
+# Tunable interaction parameters
+# - BORDER_WIDTH: keep constant to avoid layout shifts when hovering
+# - HOVER_BORDER_COLOR: color of highlighted border
+# - DIM_OPACITY: opacity applied to non-hovered photos
+# - ANIM_DURATION_MS: animation duration for opacity transitions (reduce for snappier response)
+# Modify these values below to tweak responsiveness and visual strength.
+# -----------------------------
+BORDER_WIDTH = 4
+HOVER_BORDER_COLOR = "#f1c40f"
+DIM_OPACITY = 0.4
+ANIM_DURATION_MS = 60
+
+class SelectablePhoto(QLabel):
+    hovered = pyqtSignal(object)  # emit self
+    unhovered = pyqtSignal(object)
+    clicked = pyqtSignal(str)
 
     def __init__(self, image_path, size=180, parent=None):
         super().__init__(parent)
         self.image_path = image_path
+        self.base_size = size
         self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
-        # Keep photo fully opaque, use a solid white border so it pops on the dim background
         self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
-        
-        # Load and verify image
+
+        # Do not attach a persistent QGraphicsOpacityEffect here because
+        # Qt may take ownership and delete it when another effect is set.
+        # We'll create effects on-demand when dimming/restoring.
+
+        # Note: do NOT create a persistent QGraphicsDropShadowEffect here.
+        # We'll create a fresh shadow effect when hovered to avoid Qt ownership/deletion issues.
+
+        # store current pixmap for fast scaled display
+        self._raw_pix = None
+        self._display_pix = None
         if os.path.exists(image_path):
-            self.set_image(image_path, size)
-    
+            # pre-render a slightly larger pixmap to allow smooth scaling down/up
+            render_size = int(self.base_size * 1.2)
+            self.set_image(image_path, render_size)
+            if self._raw_pix:
+                # set scaled contents so QLabel will scale pixmap with widget size
+                self.setScaledContents(True)
+                self.setPixmap(self._display_pix.scaled(self.base_size, self.base_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+
     def set_image(self, path, size):
         pix = QPixmap(path)
-        if not pix.isNull():
-            # Scale Aspect Fill
+        if pix and not pix.isNull():
+            self._raw_pix = pix
             scaled = pix.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            
-            # Crop center
             final = QPixmap(size, size)
             final.fill(Qt.transparent)
             p = QPainter(final)
             p.setRenderHint(QPainter.Antialiasing)
-            
-            # Rounded rect visual clip
             path_draw = QPainterPath()
             path_draw.addRoundedRect(0, 0, size, size, 15, 15)
             p.setClipPath(path_draw)
-            
-            # Draw center
             x = (size - scaled.width()) // 2
             y = (size - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)
             p.end()
-            
-            self.setPixmap(final)
+            # store display pixmap for fast reuse
+            self._display_pix = final
+            # do not call setPixmap here when pre-rendering larger size
 
     def enterEvent(self, event):
-        # Hover Effect: Bright Yellow Border (no translucent overlay so photo stays bright)
-        self.setStyleSheet("border: 5px solid #f1c40f; border-radius: 15px; background: transparent;")
+        self.hovered.emit(self)
+        # visual: change border color only (keep width constant to avoid layout shifts)
+        self.setStyleSheet(f"border: {BORDER_WIDTH}px solid {HOVER_BORDER_COLOR}; border-radius: 15px; background: transparent;")
+        # Create a transient shadow effect for glow
+        try:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(24)
+            shadow.setOffset(0, 0)
+            shadow.setColor(QColor(241, 196, 15, 200))
+            self.setGraphicsEffect(shadow)
+        except Exception:
+            pass
+        # slight visual emphasis: keep same widget size but rely on shadow and border
+        # because resizing within layouts causes relayout jitter. If a higher-quality
+        # scale is desired, the pre-rendered pixmap will allow crisp visuals.
+        try:
+            # refresh pixmap to ensure scaledContents fills nicely
+            if self._display_pix:
+                self.setPixmap(self._display_pix.scaled(self.width(), self.height(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        except Exception:
+            pass
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self.unhovered.emit(self)
+        # revert visuals
         self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+        # Remove any graphics effect (shadow) to restore original look
+        try:
+            self.setGraphicsEffect(None)
+        except Exception:
+            pass
+        try:
+            if self._display_pix:
+                self.setPixmap(self._display_pix.scaled(self.width(), self.height(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+        except Exception:
+            pass
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -181,9 +238,11 @@ class PhotoSelectorOverlay(QWidget):
         
         for f in files:
             full_path = os.path.join(self.real_dir, f)
-            lbl = ClickableLabel(full_path, size=200)
-            lbl.clicked.connect(self.on_photo_clicked)
-            self.grid_layout.addWidget(lbl, row, col)
+            photo = SelectablePhoto(full_path, size=200)
+            photo.clicked.connect(self.on_photo_clicked)
+            photo.hovered.connect(self.on_child_hover)
+            photo.unhovered.connect(self.on_child_unhover)
+            self.grid_layout.addWidget(photo, row, col)
             
             col += 1
             if col >= cols:
@@ -214,3 +273,99 @@ class PhotoSelectorOverlay(QWidget):
             # Fallback behavior: just show normally
             self.raise_()
             self.show()
+
+    # -------------------------
+    # 聚光燈互動邏輯
+    # -------------------------
+    def on_child_hover(self, widget):
+        # Called when a SelectablePhoto is hovered
+        for i in range(self.grid_layout.count()):
+            item = self.grid_layout.itemAt(i)
+            w = item.widget()
+            if not w:
+                continue
+            try:
+                if w is widget:
+                    # ensure this widget is fully visible; remove any dimming effect
+                    try:
+                        w.setGraphicsEffect(None)
+                    except Exception:
+                        pass
+                    # hover visuals are handled by SelectablePhoto.enterEvent
+                else:
+                    # dim others by installing a transient opacity effect with a short animation
+                    try:
+                        eff = QGraphicsOpacityEffect(w)
+                        w.setGraphicsEffect(eff)
+                        anim = QPropertyAnimation(eff, b"opacity", self)
+                        anim.setDuration(ANIM_DURATION_MS)
+                        anim.setStartValue(1.0)
+                        anim.setEndValue(DIM_OPACITY)
+                        anim.start()
+                        # keep reference to avoid GC
+                        w._opacity_anim = anim
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def on_child_unhover(self, widget):
+        # Called when a SelectablePhoto is unhovered.
+        # If mouse is still over another photo, do nothing (that photo will emit its hover).
+        pos = QCursor.pos()
+        under = QApplication.widgetAt(pos)
+        while under:
+            if isinstance(under, SelectablePhoto):
+                return
+            if under.isWindow():
+                break
+            under = under.parent()
+        # otherwise reset all
+        self.reset_focus()
+
+    def reset_focus(self):
+        for i in range(self.grid_layout.count()):
+            item = self.grid_layout.itemAt(i)
+            w = item.widget()
+            if not w:
+                continue
+            try:
+                # remove any transient graphics effect (opacity/shadow)
+                try:
+                    # animate opacity back to 1.0 if there is an effect
+                    eff = w.graphicsEffect()
+                    if isinstance(eff, QGraphicsOpacityEffect):
+                        try:
+                            anim = QPropertyAnimation(eff, b"opacity", self)
+                            anim.setDuration(ANIM_DURATION_MS)
+                            anim.setStartValue(eff.opacity())
+                            anim.setEndValue(1.0)
+                            anim.start()
+                            w._opacity_anim = anim
+                            # ensure it is removed after animation
+                            def _cleanup():
+                                try:
+                                    w.setGraphicsEffect(None)
+                                except Exception:
+                                    pass
+                            anim.finished.connect(_cleanup)
+                        except Exception:
+                            try:
+                                w.setGraphicsEffect(None)
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            w.setGraphicsEffect(None)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # restore border and size if SelectablePhoto
+                if isinstance(w, SelectablePhoto):
+                    w.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+                    w.setFixedSize(w.base_size, w.base_size)
+                    if w._raw_pix:
+                        w.set_image(w.image_path, w.base_size)
+            except Exception:
+                pass
