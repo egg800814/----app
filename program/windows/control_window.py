@@ -61,6 +61,11 @@ class ControlWindow(QMainWindow):
             print(f"[Init] 已載入備用音效: {path}")
         else:
             print("[Init] 未找到任何支援的音效檔 (建議使用 .wav 格式)")
+        # 強制系統控制視窗使用系統預設游標
+        try:
+            self.setCursor(Qt.ArrowCursor)
+        except Exception:
+            pass
 
         self.prizes = [
             "副總經理獎 - 6,000元", 
@@ -82,6 +87,11 @@ class ControlWindow(QMainWindow):
         
         # [新增] 讀取存檔
         self.load_data()
+        # 不要從存檔還原獎項對應的頭像，使用者每次啟動需重新選擇
+        try:
+            self.prize_avatars = {}
+        except Exception:
+            pass
         
         # 初始化大螢幕視窗
         self.display_window = DisplayWindow()
@@ -169,6 +179,7 @@ class ControlWindow(QMainWindow):
                 background-color: white;
                 color: black;
                 selection-background-color: #3498db;
+        self._suppress_avatar_info = False
             }
         """)
         self.prize_combo.addItems(self.prizes)
@@ -469,9 +480,10 @@ class ControlWindow(QMainWindow):
 
     def save_data(self):
         """將目前的設定寫入 JSON"""
+        # 不在檔案中儲存 prize_avatars，確保每次啟動需重新選取照片
         data = {
             "prizes": self.prizes,
-            "prize_avatars": self.prize_avatars,
+            "prize_avatars": {},
             "list_content": self.list_content,
             "current_prize_idx": self.prize_combo.currentIndex()
         }
@@ -542,9 +554,28 @@ class ControlWindow(QMainWindow):
 
     def update_preview_content(self):
         """僅更新預覽畫面，不影響大螢幕"""
+        idx = self.prize_combo.currentIndex()
         current_prize = self.prize_combo.currentText()
-        avatar_path = self.prize_avatars.get(current_prize)
-        self.preview_wheel.set_presenter_avatar(avatar_path)
+        avatar_path = None
+        try:
+            if idx >= 0:
+                avatar_path = self.prize_avatars.get(str(idx))
+        except Exception:
+            avatar_path = None
+        # Defensive: only set avatar if path exists and is valid
+        try:
+            if avatar_path and os.path.exists(avatar_path):
+                try:
+                    self.preview_wheel.set_presenter_avatar(avatar_path)
+                except Exception as e:
+                    print(f"[Control] Error setting preview avatar: {e}")
+            else:
+                try:
+                    self.preview_wheel.set_presenter_avatar(None)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Control] Unexpected error in update_preview_content: {e}")
         
         # 更新此處的標題以顯示目前選擇的獎項
         self.preview_label.setText(f"📺 預覽中：{current_prize}")
@@ -554,7 +585,13 @@ class ControlWindow(QMainWindow):
     def publish_to_display(self):
         """將目前設定發布到大螢幕"""
         current_prize = self.prize_combo.currentText()
-        avatar_path = self.prize_avatars.get(current_prize)
+        idx = self.prize_combo.currentIndex()
+        avatar_path = None
+        try:
+            if idx >= 0:
+                avatar_path = self.prize_avatars.get(str(idx))
+        except Exception:
+            avatar_path = None
         items_text = self.list_edit.toPlainText()
         
         # 更新大螢幕
@@ -584,8 +621,13 @@ class ControlWindow(QMainWindow):
             self.prizes[current_index] = new_name
             self.prize_combo.setItemText(current_index, new_name)
             
-            if old_name in self.prize_avatars:
-                self.prize_avatars[new_name] = self.prize_avatars.pop(old_name)
+            # prize_avatars mapped by index; preserve mapping by index if exists
+            try:
+                key = str(current_index)
+                if key in self.prize_avatars:
+                    self.prize_avatars[key] = self.prize_avatars.get(key)
+            except Exception:
+                pass
                 
             self.update_preview_content()
             self.save_data() # [新增] 自動存檔
@@ -608,9 +650,23 @@ class ControlWindow(QMainWindow):
             # Remove from combobox
             self.prize_combo.removeItem(current_index)
             
-            # Remove avatar if exists
-            if prize_name in self.prize_avatars:
-                del self.prize_avatars[prize_name]
+            # Remove avatar mapping for deleted index and shift higher indices down
+            try:
+                new_map = {}
+                for k, v in list(self.prize_avatars.items()):
+                    try:
+                        ik = int(k)
+                    except Exception:
+                        continue
+                    if ik == current_index:
+                        continue
+                    if ik > current_index:
+                        new_map[str(ik-1)] = v
+                    else:
+                        new_map[str(ik)] = v
+                self.prize_avatars = new_map
+            except Exception:
+                pass
                 
             self.update_preview_content()
             self.save_data() # [新增] 自動存檔
@@ -622,7 +678,7 @@ class ControlWindow(QMainWindow):
         if text:
             self.prizes.append(text)
             self.prize_combo.addItem(text)
-            self.prize_combo.setCurrentText(text)
+            self.prize_combo.setCurrentIndex(self.prize_combo.count() - 1)
             self.new_prize_input.clear()
             
             self.save_data() # [新增] 自動存檔
@@ -647,41 +703,106 @@ class ControlWindow(QMainWindow):
         self.preview_wheel.set_items(items_text)
 
     def load_avatar(self):
-        fname, _ = QFileDialog.getOpenFileName(self, '選擇照片', '', "Images (*.jpg *.jpeg *.png *.bmp *.JPG *.JPEG *.PNG);;All Files (*)")
-        if fname:
-            image = QImage(fname)
-            if image.isNull():
-                QMessageBox.warning(self, "讀取錯誤", "圖片讀取失敗，請確認格式。")
-                return
+        try:
+            fname, _ = QFileDialog.getOpenFileName(self, '選擇照片', '', "Images (*.jpg *.jpeg *.png *.bmp *.JPG *.JPEG *.PNG);;All Files (*)")
+            if fname:
+                image = QImage(fname)
+                if image.isNull():
+                    QMessageBox.warning(self, "讀取錯誤", "圖片讀取失敗，請確認格式。")
+                    return
 
-            current_prize = self.prize_combo.currentText()
-            self.prize_avatars[current_prize] = fname
-            
-            self.update_preview_content()
-            msg.exec_()
+                idx = self.prize_combo.currentIndex()
+                if idx >= 0:
+                    try:
+                        self.prize_avatars[str(idx)] = fname
+                    except Exception:
+                        pass
+                
+                self.update_preview_content()
+                
+                # 自動存檔
+                self.save_data()
+                
+                # 顯示成功訊息（使用 QMessageBox 避免未定義變數）
+                try:
+                    current_prize = self.prize_combo.currentText()
+                    QMessageBox.information(self, "已設定頭像", f"已為【{current_prize}】設定頭像：\n{os.path.basename(fname)}")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[ControlWindow] load_avatar error: {e}")
+            QMessageBox.warning(self, "錯誤", f"選擇照片時發生錯誤：\n{e}")
 
     def open_remote_selector(self):
         """開啟大螢幕的照片選擇器"""
+        # 取得目前選中的獎項並傳遞給大螢幕 overlay 的主標題
+        current_prize = self.prize_combo.currentText()
+        # 設定 suppression 旗標，避免大螢幕回傳時彈出資訊視窗
+        self._suppress_avatar_info = True
+        if current_prize:
+            try:
+                # 優先使用接收參數的顯示方法
+                if hasattr(self.display_window, 'show_photo_selector_for_prize'):
+                    self.display_window.show_photo_selector_for_prize(current_prize)
+                    return
+            except Exception:
+                pass
+        # 回退：不帶參數的顯示方法
         self.display_window.show_photo_selector()
 
     def on_remote_avatar_updated(self, path):
         """當大螢幕選完照片後，同步回傳"""
-        current_prize = self.prize_combo.currentText()
-        if not current_prize:
-             QMessageBox.warning(self, "錯誤", "請先選擇一個獎項，才能設定頭像")
-             return
-             
-        # 存入字典
-        self.prize_avatars[current_prize] = path
+        idx = self.prize_combo.currentIndex()
+        if idx < 0:
+            QMessageBox.warning(self, "錯誤", "請先選擇一個獎項，才能設定頭像")
+            return
+        # 存入字典（以索引為 key）
+        try:
+            self.prize_avatars[str(idx)] = path
+        except Exception:
+            pass
         
         # 更新即時預覽
-        self.update_preview_content()
+        # NOTE: 為了避免在接收遠端選人時觸發可能的 native 崩潰，暫時不立即更新預覽。
+        # 會由使用者手動或之後的安全排程更新預覽。
+        try:
+            logpath2 = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
+            with open(logpath2, 'a', encoding='utf-8') as f:
+                f.write(f"ControlWindow: SKIP update_preview_content for remote {path}\n")
+        except Exception:
+            pass
         
         # 自動存檔
-        self.save_data()
-        
-        QMessageBox.information(self, "更新成功", 
-                                f"已為【{current_prize}】設定新頭像！\n路徑: {os.path.basename(path)}")
+        try:
+            self.save_data()
+        except Exception as e:
+            print(f"[ControlWindow] save_data error in on_remote_avatar_updated: {e}")
+
+        try:
+            logpath = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
+            with open(logpath, 'a', encoding='utf-8') as f:
+                f.write(f"ControlWindow: on_remote_avatar_updated -> {path}\n")
+        except Exception:
+            pass
+        # 若為來自大螢幕的選取（open_remote_selector 觸發），不顯示訊息視窗
+        try:
+            if getattr(self, '_suppress_avatar_info', False):
+                self._suppress_avatar_info = False
+                return
+        except Exception:
+            pass
+
+        # 來自使用者手動上傳（load_avatar）時，顯示確認訊息
+        # load_avatar 內部會主動顯示對話，因此此處保留最小訊息以避免重複
+        try:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("更新成功")
+            current_prize = self.prize_combo.currentText()
+            msg.setText(f"已為【{current_prize}】設定新頭像！\n路徑: {os.path.basename(path)}")
+            msg.setIcon(QMessageBox.NoIcon)
+            msg.exec_()
+        except Exception:
+            pass
 
     def on_remote_spin_started(self):
         """當大螢幕開始轉動 (長按) 時，鎖定系統端按鈕"""

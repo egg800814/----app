@@ -4,20 +4,24 @@ from PyQt5.QtWidgets import (QWidget, QApplication, QVBoxLayout, QGridLayout, QL
                              QScrollArea, QPushButton, QFrame, QGraphicsOpacityEffect, QGraphicsDropShadowEffect)
 from PyQt5.QtGui import QPixmap, QCursor, QPainter, QPainterPath, QColor
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QEvent
+from PyQt5.QtCore import QPoint, QTimer
 from PyQt5.QtCore import QPropertyAnimation
 
 # -----------------------------
-# Tunable interaction parameters
-# - BORDER_WIDTH: keep constant to avoid layout shifts when hovering
-# - HOVER_BORDER_COLOR: color of highlighted border
-# - DIM_OPACITY: opacity applied to non-hovered photos
-# - ANIM_DURATION_MS: animation duration for opacity transitions (reduce for snappier response)
-# Modify these values below to tweak responsiveness and visual strength.
+# 可調整的互動參數（中文註解）
+# - BORDER_WIDTH: 邊框寬度（固定寬度以避免懸停時版面跳動）
+# - HOVER_BORDER_COLOR: 懸停時的邊框顏色
+# - DIM_OPACITY: 未被選中的照片暗度（0.0 - 1.0）
+# - ANIM_DURATION_MS: 透明度動畫時間（毫秒），值越小反應越快
+# 請在此區修改值以調整互動強度與速度。
 # -----------------------------
 BORDER_WIDTH = 4
 HOVER_BORDER_COLOR = "#f1c40f"
 DIM_OPACITY = 0.4
 ANIM_DURATION_MS = 60
+# 游標尺寸（像素）。如需縮放游標圖示，調整此值。
+CURSOR_SIZE = 120
+PREVIEW_SCALE = 1.6
 
 class SelectablePhoto(QLabel):
     hovered = pyqtSignal(object)  # emit self
@@ -138,13 +142,18 @@ class PhotoSelectorOverlay(QWidget):
 
         # Dim background (lightbox) — keep as child widget overlay, slightly stronger dim
         self.setStyleSheet("background-color: rgba(0, 0, 0, 0.8);")
+        # small event log to help trace selection flow
+        try:
+            self._logpath = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
+        except Exception:
+            self._logpath = None
 
-        # Main Layout (overlay)
+        # 主佈局（Overlay）
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         layout.setContentsMargins(50, 50, 50, 50)
 
-        # Create a centered panel that visually separates the photo grid from the dim background
+        # 中央面板：將照片網格與暗背景視覺區隔
         panel = QFrame()
         panel.setObjectName('photoPanel')
         panel.setStyleSheet('background-color: rgba(0, 0, 0, 0.85); border-radius: 20px;')
@@ -159,11 +168,34 @@ class PhotoSelectorOverlay(QWidget):
         shadow.setColor(QColor(0, 0, 0, 200))
         panel.setGraphicsEffect(shadow)
 
-        # Title (bright)
-        title = QLabel("選人")
-        title.setStyleSheet("color: #f1c40f; font-size: 80px; font-weight: bold; background: transparent; margin-bottom: 10px;")
-        title.setAlignment(Qt.AlignCenter)
-        panel_layout.addWidget(title, 0, Qt.AlignCenter)
+        # 標題區（包含主標題與副標題） - 主標題會動態顯示目前要選的人員所屬獎項
+        self.title_container = QWidget()
+        title_layout = QVBoxLayout(self.title_container)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(12)
+
+        # 主標題（會由後台傳入獎項名稱）
+        self.dynamic_prize_label = QLabel("🎉 準備選人 🎉")
+        self.dynamic_prize_label.setAlignment(Qt.AlignCenter)
+        self.dynamic_prize_label.setStyleSheet("color: #f1c40f; font-size: 60px; font-weight: bold; background: transparent;")
+        # 加陰影以在深色背景上清晰可見
+        prize_shadow = QGraphicsDropShadowEffect(self.dynamic_prize_label)
+        prize_shadow.setBlurRadius(20)
+        prize_shadow.setOffset(0, 4)
+        prize_shadow.setColor(QColor(0,0,0,200))
+        self.dynamic_prize_label.setGraphicsEffect(prize_shadow)
+
+        # 副標題：固定引導文字
+        self.subtitle_label = QLabel("榮耀時刻，請指定開啟幸運的推手")
+        self.subtitle_label.setAlignment(Qt.AlignCenter)
+        self.subtitle_label.setStyleSheet("color: white; font-size: 32px; background: transparent;")
+
+        title_layout.addWidget(self.dynamic_prize_label)
+        title_layout.addWidget(self.subtitle_label)
+        panel_layout.addWidget(self.title_container, 0, Qt.AlignCenter)
+
+        # 在主標題與照片網格之間保留空間
+        panel_layout.addSpacing(10)
 
         # Scroll Area (contains grid)
         scroll = QScrollArea()
@@ -186,10 +218,12 @@ class PhotoSelectorOverlay(QWidget):
 
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setSpacing(30)
+        self.grid_layout.setSpacing(48) # [設定] 這裡控制照片之間的間距 (像素)
         self.grid_layout.setAlignment(Qt.AlignCenter)
 
         scroll.setWidget(self.grid_container)
+        # keep reference to scroll area so we can preserve scroll position during hover effects
+        self.scroll = scroll
         panel_layout.addWidget(scroll, 1)
 
         # Close Button
@@ -204,10 +238,23 @@ class PhotoSelectorOverlay(QWidget):
             QPushButton:pressed { background-color: #a93226; }
         """)
         close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.clicked.connect(self.hide)
+        close_btn.clicked.connect(self._on_close_clicked)
         panel_layout.addWidget(close_btn, 0, Qt.AlignCenter)
 
         layout.addWidget(panel)
+
+        # 用於懸停時顯示的浮動放大預覽（避免改變原本格子大小導致布局跳動）
+        self._highlight_label = None
+        # 儲存預設游標，以便還原
+        self._default_cursor = QApplication.overrideCursor()
+        # 儲存先前 override cursor（如果有）以便正確還原
+        self._prev_override = None
+        # 準備游標圖片路徑（預設在專案根目錄的 assets/images）
+        base = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(base))
+        images_root = os.path.join(project_root, "assets", "images")
+        self._cursor_img_hover = os.path.join(images_root, "wood_hammer1.png")
+        self._cursor_img_click = os.path.join(images_root, "wood_hammer2.png")
 
     def refresh_images(self):
         # Clear existing items
@@ -250,12 +297,53 @@ class PhotoSelectorOverlay(QWidget):
                 row += 1
 
     def on_photo_clicked(self, path):
-        # 點擊照片後發送路徑訊號，並關閉視窗
-        print(f"[PhotoSelector] Selected: {path}")
-        self.photoSelected.emit(path)
-        self.hide()
+        # 更安全的選取處理流程：先發出訊號，短延遲後再由 hideEvent 統一處理關閉與游標還原
+        try:
+            print(f"[PhotoSelector] Selected: {path}")
+            if self._logpath:
+                with open(self._logpath, 'a', encoding='utf-8') as f:
+                    f.write(f"PhotoSelector: clicked -> {path}\n")
+        except Exception:
+            pass
+
+        # 發出選取訊號（由 DisplayWindow / ControlWindow 接手後續處理）
+        try:
+            self.photoSelected.emit(path)
+        except Exception:
+            pass
+
+        # 切換到點擊游標（視覺回饋） -> [FIX] 移除以避免 Windows 崩潰 (Invalid cursor shape)
+        # try:
+        #     if os.path.exists(self._cursor_img_click):
+        #         pix = QPixmap(self._cursor_img_click)
+        #         if not pix.isNull():
+        #             sp = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        #             if self._prev_override is None:
+        #                 try:
+        #                     self._prev_override = QApplication.overrideCursor()
+        #                 except Exception:
+        #                     self._prev_override = None
+        #             QApplication.setOverrideCursor(QCursor(sp, sp.width()//2, sp.height()//2))
+        # except Exception:
+        #     pass
+
+        # 延遲隱藏 overlay，避免在 signal/slot 連鎖中立刻造成資源競爭
+        try:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(120, lambda: self.hide())
+        except Exception:
+            try:
+                self.hide()
+            except Exception:
+                pass
         
-    def show_selector(self):
+    def show_selector(self, prize_name=None):
+        # 開啟選人視窗；可傳入 prize_name 以更新主標題
+        if prize_name:
+            try:
+                self.dynamic_prize_label.setText(prize_name)
+            except Exception:
+                pass
         self.refresh_images() # 每次開啟重新掃描，確保有新照片能讀到
         # Ensure the overlay covers the full parent (top-level) window and stays on top
         parent_window = None
@@ -265,6 +353,13 @@ class PhotoSelectorOverlay(QWidget):
         # As a child overlay: match parent size and show on top of siblings
         parent = self.parent()
         if parent is not None:
+            # 當 overlay 顯示時，暫時隱藏父層的游標跟隨標誌（例如 DisplayWindow.cursor_fol_label）
+            try:
+                if hasattr(parent, 'cursor_fol_label') and parent.cursor_fol_label is not None:
+                    parent.cursor_fol_label.hide()
+            except Exception:
+                pass
+
             self.resize(parent.size())
             # ensure the overlay is visually above other children
             self.raise_()
@@ -279,6 +374,42 @@ class PhotoSelectorOverlay(QWidget):
     # -------------------------
     def on_child_hover(self, widget):
         # Called when a SelectablePhoto is hovered
+        # 顯示浮動放大預覽並讓其他圖片變暗
+        # 1) 建立或更新浮動預覽
+        try:
+            # 計算浮動預覽大小（比原圖大一些以提供明顯放大反饋）
+            preview_size = int(widget.base_size * PREVIEW_SCALE)
+            # 建立浮動 QLabel
+            if not self._highlight_label:
+                self._highlight_label = QLabel(self)
+                self._highlight_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+                self._highlight_label.setStyleSheet('border: 5px solid %s; border-radius: 18px;' % HOVER_BORDER_COLOR)
+            # 使用 SelectablePhoto 預先渲染的 pixmap 作為來源，保持品質
+            try:
+                if widget._display_pix:
+                    pix = widget._display_pix.scaled(preview_size, preview_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    self._highlight_label.setPixmap(pix)
+                    self._highlight_label.setFixedSize(preview_size, preview_size)
+                    # 計算浮動位置：以被懸停照片中心為中心點
+                    # use widget coordinates mapped to overlay to avoid global <-> local jitter
+                    local_center = widget.mapTo(self, widget.rect().center())
+                    top_left = QPoint(local_center.x() - preview_size//2, local_center.y() - preview_size//2)
+                    self._highlight_label.move(top_left)
+                    self._highlight_label.show()
+                    self._highlight_label.raise_()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # 2) 讓其他照片變暗
+        # Preserve scroll offsets to avoid the scroll area re-centering briefly
+        try:
+            vval = self.scroll.verticalScrollBar().value()
+            hval = self.scroll.horizontalScrollBar().value()
+        except Exception:
+            vval = hval = None
+
         for i in range(self.grid_layout.count()):
             item = self.grid_layout.itemAt(i)
             w = item.widget()
@@ -295,19 +426,37 @@ class PhotoSelectorOverlay(QWidget):
                 else:
                     # dim others by installing a transient opacity effect with a short animation
                     try:
+                        # Apply a simple, immediate opacity effect (avoids animation-induced layout jitter)
                         eff = QGraphicsOpacityEffect(w)
+                        eff.setOpacity(DIM_OPACITY)
                         w.setGraphicsEffect(eff)
-                        anim = QPropertyAnimation(eff, b"opacity", self)
-                        anim.setDuration(ANIM_DURATION_MS)
-                        anim.setStartValue(1.0)
-                        anim.setEndValue(DIM_OPACITY)
-                        anim.start()
-                        # keep reference to avoid GC
-                        w._opacity_anim = anim
                     except Exception:
                         pass
             except Exception:
                 pass
+        # restore scroll offsets (if we saved them) to prevent visible jumps
+        try:
+            if vval is not None:
+                self.scroll.verticalScrollBar().setValue(vval)
+            if hval is not None:
+                self.scroll.horizontalScrollBar().setValue(hval)
+        except Exception:
+            pass
+        # 3) 變更游標為木鎚（懸停圖） -> [FIX] 移除以避免 Windows 崩潰
+        # try:
+        #     if os.path.exists(self._cursor_img_hover):
+        #         pix = QPixmap(self._cursor_img_hover)
+        #         if not pix.isNull():
+        #             sp = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        #             # 儲存先前的 override（只儲存一次）
+        #             if self._prev_override is None:
+        #                 try:
+        #                     self._prev_override = QApplication.overrideCursor()
+        #                 except Exception:
+        #                     self._prev_override = None
+        #             QApplication.setOverrideCursor(QCursor(sp, sp.width()//2, sp.height()//2))
+        # except Exception:
+        #     pass
 
     def on_child_unhover(self, widget):
         # Called when a SelectablePhoto is unhovered.
@@ -320,8 +469,29 @@ class PhotoSelectorOverlay(QWidget):
             if under.isWindow():
                 break
             under = under.parent()
-        # otherwise reset all
+        # otherwise reset所有視覺狀態
         self.reset_focus()
+        # 還原游標（使用儲存的先前 override，或直接 restore）
+        try:
+            if self._prev_override is not None:
+                # 移除目前 override，並恢復先前儲存的 override（若存在）
+                try:
+                    QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+                try:
+                    if self._prev_override is not None:
+                        QApplication.setOverrideCursor(self._prev_override)
+                except Exception:
+                    pass
+                self._prev_override = None
+            else:
+                try:
+                    QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def reset_focus(self):
         for i in range(self.grid_layout.count()):
@@ -332,33 +502,11 @@ class PhotoSelectorOverlay(QWidget):
             try:
                 # remove any transient graphics effect (opacity/shadow)
                 try:
-                    # animate opacity back to 1.0 if there is an effect
-                    eff = w.graphicsEffect()
-                    if isinstance(eff, QGraphicsOpacityEffect):
-                        try:
-                            anim = QPropertyAnimation(eff, b"opacity", self)
-                            anim.setDuration(ANIM_DURATION_MS)
-                            anim.setStartValue(eff.opacity())
-                            anim.setEndValue(1.0)
-                            anim.start()
-                            w._opacity_anim = anim
-                            # ensure it is removed after animation
-                            def _cleanup():
-                                try:
-                                    w.setGraphicsEffect(None)
-                                except Exception:
-                                    pass
-                            anim.finished.connect(_cleanup)
-                        except Exception:
-                            try:
-                                w.setGraphicsEffect(None)
-                            except Exception:
-                                pass
-                    else:
-                        try:
-                            w.setGraphicsEffect(None)
-                        except Exception:
-                            pass
+                    # remove any transient graphics effect immediately
+                    try:
+                        w.setGraphicsEffect(None)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 # restore border and size if SelectablePhoto
@@ -369,3 +517,66 @@ class PhotoSelectorOverlay(QWidget):
                         w.set_image(w.image_path, w.base_size)
             except Exception:
                 pass
+        # 隱藏並清理浮動放大預覽
+        try:
+            if self._highlight_label:
+                try:
+                    self._highlight_label.hide()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_close_clicked(self):
+        # 使用者按下關閉按鈕：還原游標並關閉 overlay
+        # 清除所有 override cursor，恢復系統預設游標
+        try:
+            while QApplication.overrideCursor() is not None:
+                try:
+                    QApplication.restoreOverrideCursor()
+                except Exception:
+                    break
+        except Exception:
+            pass
+        try:
+            self.reset_focus()
+        except Exception:
+            pass
+        try:
+            self.hide()
+        except Exception:
+            pass
+
+    def hideEvent(self, event):
+        # 當 overlay 隱藏時，確保還原游標與清理浮動預覽
+        # 清除所有 override cursor，恢復系統預設游標
+        try:
+            if getattr(self, '_logpath', None):
+                with open(self._logpath, 'a', encoding='utf-8') as f:
+                    f.write("PhotoSelector: hideEvent called\n")
+        except Exception:
+            pass
+        try:
+            while QApplication.overrideCursor() is not None:
+                try:
+                    QApplication.restoreOverrideCursor()
+                except Exception:
+                    break
+        except Exception:
+            pass
+        try:
+            if self._highlight_label:
+                self._highlight_label.hide()
+        except Exception:
+            pass
+        # 還原父層的 cursor_fol_label（若存在）
+        try:
+            parent = self.parent()
+            if parent is not None and hasattr(parent, 'cursor_fol_label'):
+                try:
+                    parent.cursor_fol_label.show()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        super().hideEvent(event)

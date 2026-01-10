@@ -484,15 +484,49 @@ class DisplayWindow(QWidget):
 
     def show_photo_selector(self):
         """顯示照片選擇器 (由控制端觸發)"""
+        # 舊的呼叫介面（不提供獎項名稱）維持相容
         self.photo_selector.show_selector()
+
+    def show_photo_selector_for_prize(self, prize_name):
+        """顯示照片選擇器並顯示指定的獎項名稱（由 ControlWindow 呼叫）"""
+        try:
+            self.photo_selector.show_selector(prize_name)
+        except Exception:
+            # 回退到不帶參數的呼叫
+            self.photo_selector.show_selector()
 
     def on_photo_selected(self, path):
         """當在大螢幕選完照片後"""
         print(f"[Display] Photo selected: {path}")
-        # 更新轉盤
-        self.wheel.set_presenter_avatar(path)
+        try:
+            logpath = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
+            with open(logpath, 'a', encoding='utf-8') as f:
+                f.write(f"DisplayWindow: on_photo_selected -> {path}\n")
+        except Exception:
+            pass
+        # 更新轉盤：改為延遲執行以避免在選取流程中直接觸發 native 層的 race/crash
+        try:
+            def _safe_set():
+                try:
+                    if hasattr(self, 'wheel') and self.wheel is not None:
+                        self.wheel.set_presenter_avatar(path)
+                except Exception as e:
+                    try:
+                        logpath = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
+                        with open(logpath, 'a', encoding='utf-8') as f:
+                            f.write(f"DisplayWindow: safe_set_presenter_avatar ERROR -> {e}\n")
+                    except Exception:
+                        pass
+
+            QTimer.singleShot(100, _safe_set)
+        except Exception as e:
+            print(f"[Display] Unexpected error scheduling set_presenter_avatar: {e}")
+
         # 通知控制端 (以便存檔與同步)
-        self.avatarUpdated.emit(path)
+        try:
+            self.avatarUpdated.emit(path)
+        except Exception:
+            pass
 
     def update_prize_name(self, prize_name):
         self.prize_label.setText(prize_name)

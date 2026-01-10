@@ -105,19 +105,31 @@ class LuckyWheelWidget(QWidget):
 
     def set_presenter_avatar(self, image_path):
         size = 100
-        if image_path:
-            original = QPixmap(image_path)
-            self.presenter_pixmap = QPixmap(size, size)
-            self.presenter_pixmap.fill(Qt.transparent)
-            painter = QPainter(self.presenter_pixmap)
-            painter.setRenderHint(QPainter.Antialiasing)
-            path = QPainterPath()
-            path.addEllipse(0, 0, size, size)
-            painter.setClipPath(path)
-            painter.drawPixmap(0, 0, size, size, original)
-            painter.end()
-        else:
-            self.presenter_pixmap = None
+        try:
+            if image_path and os.path.exists(image_path):
+                original = QPixmap(image_path)
+                if original.isNull():
+                    print(f"[LuckyWheel] Error: Failed to load image from {image_path}")
+                    self.presenter_pixmap = None
+                else:
+                    self.presenter_pixmap = QPixmap(size, size)
+                    self.presenter_pixmap.fill(Qt.transparent)
+                    
+                    painter = QPainter(self.presenter_pixmap)
+                    try:
+                        painter.setRenderHint(QPainter.Antialiasing)
+                        path = QPainterPath()
+                        path.addEllipse(0, 0, size, size)
+                        painter.setClipPath(path)
+                        painter.drawPixmap(0, 0, size, size, original)
+                    finally:
+                        painter.end()
+            else:
+                self.presenter_pixmap = None
+        except Exception as e:
+             print(f"[LuckyWheel] Exception in set_presenter_avatar: {e}")
+             self.presenter_pixmap = None
+
         self.update()
 
     def update_leds(self):
