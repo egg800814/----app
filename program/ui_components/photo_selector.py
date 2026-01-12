@@ -59,7 +59,7 @@ class SelectablePhoto(QLabel):
         pix = QPixmap(path)
         if pix and not pix.isNull():
             self._raw_pix = pix
-            scaled = pix.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            scaled = pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             final = QPixmap(size, size)
             final.fill(Qt.transparent)
             p = QPainter(final)
@@ -127,13 +127,18 @@ class PhotoSelectorOverlay(QWidget):
         super().__init__(parent)
         self.images_dir = images_dir
         
-        # Resolve path relative to project root if needed
-        if not os.path.isabs(self.images_dir):
-            # Assuming this file is in program/ui_components/
-            # base = program/ui_components
+        # Resolve path - support both Dev and PyInstaller (Frozen) modes
+        if getattr(sys, 'frozen', False):
+            # Running as compiled exe: look in the folder containing the exe
+            root = os.path.dirname(sys.executable)
+        else:
+            # Running as script: relative to this file
+            # This file is in program/ui_components/
             base = os.path.dirname(os.path.abspath(__file__)) 
             # root = app folder (parent of program) -> app/program/ui_components/../../ = app/
             root = os.path.dirname(os.path.dirname(base)) 
+
+        if not os.path.isabs(self.images_dir):
             self.real_dir = os.path.join(root, self.images_dir)
         else:
             self.real_dir = self.images_dir
@@ -250,9 +255,15 @@ class PhotoSelectorOverlay(QWidget):
         # 儲存先前 override cursor（如果有）以便正確還原
         self._prev_override = None
         # 準備游標圖片路徑（預設在專案根目錄的 assets/images）
-        base = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(base))
-        images_root = os.path.join(project_root, "assets", "images")
+        # Resolve cursor image path - support both Dev and PyInstaller (Frozen) modes
+        if getattr(sys, 'frozen', False):
+             root = os.path.dirname(sys.executable)
+        else:
+             base = os.path.dirname(os.path.abspath(__file__))
+             project_root = os.path.dirname(os.path.dirname(base))
+             root = project_root
+
+        images_root = os.path.join(root, "assets", "images")
         self._cursor_img_hover = os.path.join(images_root, "wood_hammer1.png")
         self._cursor_img_click = os.path.join(images_root, "wood_hammer2.png")
 
@@ -285,7 +296,7 @@ class PhotoSelectorOverlay(QWidget):
         
         for f in files:
             full_path = os.path.join(self.real_dir, f)
-            photo = SelectablePhoto(full_path, size=200)
+            photo = SelectablePhoto(full_path, size=300)
             photo.clicked.connect(self.on_photo_clicked)
             photo.hovered.connect(self.on_child_hover)
             photo.unhovered.connect(self.on_child_unhover)

@@ -57,20 +57,19 @@ class DisplayWindow(QWidget):
         self.pixmap_active = None
         
         try:
-            # 取得 assets 資料夾絕對路徑
-            # base_dir = .../program
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            # [修正] 路徑解析邏輯：支援開發模式與打包模式 (修正滑鼠 Logo 消失問題)
+            if getattr(sys, 'frozen', False):
+                # 打包後：以執行檔所在目錄為基準 (讀取外部 assets 資料夾)
+                project_root = os.path.dirname(sys.executable)
+            else:
+                # 開發模式：以檔案位置往回找專案根目錄
+                # __file__ = program/windows/display_window.py
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                project_root = os.path.dirname(base_dir)
             
-            # project_root = .../抽獎轉盤app
-            project_root = os.path.dirname(base_dir)
-            
-            # logo.jpg 與 90_logo.jpg 都在 專案根目錄/assets/images 下
+            # 設定圖片路徑
             logo_path = os.path.join(project_root, "assets", "images", "logo.jpg")
             logo_active_path = os.path.join(project_root, "assets", "images", "90_logo.jpg")
-            
-            # 如果找不到，嘗試在 program/assets/images 找 (容錯)
-            if not os.path.exists(logo_active_path):
-                 logo_active_path = os.path.join(base_dir, "assets", "images", "90_logo.jpg")
             
             # 載入一般狀態圖片 (Logo)
             if os.path.exists(logo_path):
