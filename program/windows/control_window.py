@@ -566,7 +566,7 @@ class ControlWindow(QMainWindow):
         try:
             if avatar_path and os.path.exists(avatar_path):
                 try:
-                    self.preview_wheel.set_presenter_avatar(avatar_path)
+                    self.preview_wheel.set_presenter_avatar(avatar_path, crop_mode='fit')
                 except Exception as e:
                     print(f"[Control] Error setting preview avatar: {e}")
             else:
@@ -597,7 +597,7 @@ class ControlWindow(QMainWindow):
         # 更新大螢幕
         self.display_window.update_prize_name(current_prize)
         self.display_window.wheel.set_items(items_text)
-        self.display_window.wheel.set_presenter_avatar(avatar_path)
+        self.display_window.wheel.set_presenter_avatar(avatar_path, crop_mode='fit')
         
         # [修改] 發布時，如果大螢幕還在中獎畫面，這也是一種 "重置" 訊號
         self.display_window.hide_winner_message()
@@ -763,14 +763,12 @@ class ControlWindow(QMainWindow):
             pass
         
         # 更新即時預覽
-        # NOTE: 為了避免在接收遠端選人時觸發可能的 native 崩潰，暫時不立即更新預覽。
-        # 會由使用者手動或之後的安全排程更新預覽。
+        # 更新即時預覽 (同步顯示大螢幕選的結果)
         try:
-            logpath2 = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))
-            with open(logpath2, 'a', encoding='utf-8') as f:
-                f.write(f"ControlWindow: SKIP update_preview_content for remote {path}\n")
-        except Exception:
-            pass
+            # 使用 smart 模式，讓系統端看到的預覽跟大螢幕選人結果一致 (特寫)
+            self.preview_wheel.set_presenter_avatar(path, crop_mode='smart')
+        except Exception as e:
+            print(f"[ControlWindow] Error syncing preview wheel: {e}")
         
         # 自動存檔
         try:

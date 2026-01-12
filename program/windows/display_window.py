@@ -508,7 +508,7 @@ class DisplayWindow(QWidget):
             def _safe_set():
                 try:
                     if hasattr(self, 'wheel') and self.wheel is not None:
-                        self.wheel.set_presenter_avatar(path)
+                        self.wheel.set_presenter_avatar(path, crop_mode='smart')
                 except Exception as e:
                     try:
                         logpath = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'selection.log'))

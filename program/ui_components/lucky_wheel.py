@@ -103,7 +103,8 @@ class LuckyWheelWidget(QWidget):
             self.items = [line.strip() for line in items_text.split('\n') if line.strip()]
         self.update()
 
-    def set_presenter_avatar(self, image_path):
+    def set_presenter_avatar(self, image_path, crop_mode='smart'):
+        # crop_mode: 'smart' (自動縮放裁切上半身), 'fit' (填滿圓形)
         size = 900 # [設定] 轉盤中心頭像的清晰度 (尺寸越大越清晰)
         try:
             if image_path and os.path.exists(image_path):
@@ -112,33 +113,40 @@ class LuckyWheelWidget(QWidget):
                     print(f"[LuckyWheel] Error: Failed to load image from {image_path}")
                     self.presenter_pixmap = None
                 else:
-                    # [優化] 自動裁切邏輯：頂部居中裁切 (Top-Center Crop) + 自動縮放 (Zoom)
-                    # 透過 zoom_factor 放大圖片，只取上半身特寫
-                    zoom_factor = 1.8  # [設定] 縮放係數：1.0=原圖裁切, 1.35=半身特寫, 1.5=大頭特寫
-                    
-                    target_w = int(size * zoom_factor)
-                    target_h = int(size * zoom_factor)
-                    
-                    # 1. 等比縮放至填滿 (size * zoom) 的區域
-                    scaled = original.scaled(target_w, target_h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-                    
-                    # 2. 計算裁切位置 (保留水平中心，垂直靠上)
-                    # 這樣可以確保裁切出的是 "放大的上半身"
-                    crop_x = (scaled.width() - size) // 2
-                    
-                    # [微調] 垂直偏移：稍微往下挪一點點 (避免頭頂切太齊)，但主要還是靠上
-                    # 如果是長條圖，zoom後高度很大，y=0 是頂端。
-                    # 通常人物頭頂會有一點留白，直接取 0 應該還好，或者取高度的 5%~10% 作為起始點?
-                    # 為了保險起見，我們先維持 y=0 (Top crop)，因為全身照的頭通常在最上面
-                    crop_y = 0 
-                    
-                    # 為了避免超出邊界 (雖然 KeepAspectRatioByExpanding 保證了夠大)
-                    # 加個保險
-                    if crop_x < 0: crop_x = 0
-                    
-                    # 3. 取得裁切後的正方形 (size x size)
-                    cropped = scaled.copy(crop_x, crop_y, size, size)
-                    
+                    if crop_mode == 'smart':
+                        # [優化] 自動裁切邏輯：頂部居中裁切 (Top-Center Crop) + 自動縮放 (Zoom)
+                        # 透過 zoom_factor 放大圖片，只取上半身特寫
+                        zoom_factor = 1.8  # [設定] 縮放係數：1.0=原圖裁切, 1.35=半身特寫, 1.5=大頭特寫
+                        
+                        target_w = int(size * zoom_factor)
+                        target_h = int(size * zoom_factor)
+                        
+                        # 1. 等比縮放至填滿 (size * zoom) 的區域
+                        scaled = original.scaled(target_w, target_h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                        
+                        # 2. 計算裁切位置 (保留水平中心，垂直靠上)
+                        # 這樣可以確保裁切出的是 "放大的上半身"
+                        crop_x = (scaled.width() - size) // 2
+                        
+                        # [微調] 垂直偏移：稍微往下挪一點點 (避免頭頂切太齊)，但主要還是靠上
+                        crop_y = 0 
+                        if crop_x < 0: crop_x = 0
+                        
+                        # 3. 取得裁切後的正方形 (size x size)
+                        cropped = scaled.copy(crop_x, crop_y, size, size)
+                        final_pix = cropped
+                        
+                    else:
+                        # [還原] 一般填滿模式 (Fit) - 用於電腦端選取時
+                        # 直接縮放至填滿圓形 (KeepAspectRatioByExpanding) 然後居中裁切
+                        scaled = original.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                        
+                        crop_x = (scaled.width() - size) // 2
+                        crop_y = (scaled.height() - size) // 2
+                        
+                        cropped = scaled.copy(crop_x, crop_y, size, size)
+                        final_pix = cropped
+
                     self.presenter_pixmap = QPixmap(size, size)
                     self.presenter_pixmap.fill(Qt.transparent)
                     
@@ -148,8 +156,8 @@ class LuckyWheelWidget(QWidget):
                         path = QPainterPath()
                         path.addEllipse(0, 0, size, size)
                         painter.setClipPath(path)
-                        # 繪製裁切好的正方形半身照
-                        painter.drawPixmap(0, 0, cropped)
+                        # 繪製裁切好的正方形
+                        painter.drawPixmap(0, 0, final_pix)
                     finally:
                         painter.end()
             else:
