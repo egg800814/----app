@@ -11,10 +11,12 @@ import os
 import sys
 from PyQt5.QtWidgets import (QWidget, QApplication, QVBoxLayout, QGridLayout, QLabel, 
                              QScrollArea, QPushButton, QFrame, QGraphicsOpacityEffect, QGraphicsDropShadowEffect)
-from PyQt5.QtGui import QPixmap, QCursor, QPainter, QPainterPath, QColor
+from PyQt5.QtGui import QPixmap, QCursor, QPainter, QPainterPath, QColor, QImage
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QEvent
 from PyQt5.QtCore import QPoint, QTimer
 from PyQt5.QtCore import QPropertyAnimation
+import cv2
+import numpy as np
 
 # -----------------------------
 # 可調整的互動參數（中文註解）
@@ -45,44 +47,129 @@ class SelectablePhoto(QLabel):
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
 
-        # Do not attach a persistent QGraphicsOpacityEffect here because
-        # Qt may take ownership and delete it when another effect is set.
-        # We'll create effects on-demand when dimming/restoring.
-
-        # Note: do NOT create a persistent QGraphicsDropShadowEffect here.
-        # We'll create a fresh shadow effect when hovered to avoid Qt ownership/deletion issues.
-
         # store current pixmap for fast scaled display
         self._raw_pix = None
         self._display_pix = None
         if os.path.exists(image_path):
-            # pre-render a slightly larger pixmap to allow smooth scaling down/up
-            render_size = int(self.base_size * 1.2)
+            # pre-render a larger pixmap (3.0x) to allow high quality zooming/preview
+            render_size = int(self.base_size * 10.0)
             self.set_image(image_path, render_size)
             if self._raw_pix:
                 # set scaled contents so QLabel will scale pixmap with widget size
                 self.setScaledContents(True)
                 self.setPixmap(self._display_pix.scaled(self.base_size, self.base_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
 
+    def process_transparent_border(self, pixmap):
+        """
+        自動影像處理流程：
+        1. 轉換 QPixmap -> OpenCV image
+        2. 偵測非白色的主體 (Subject Detection) - 門檻值 240
+        3. 建立遮罩 (Mask)
+        4. 遮罩擴張 (Dilation) 10px -> 透過白色邊框
+        5. 將背景去背 (Set Alpha)
+           - 遮罩內: 若原圖是 "背景白(>=240)", 強制轉為純白(255)
+           - 遮罩外: 透明
+        6. 轉換回 QPixmap
+        """
+        try:
+            # 1. QPixmap -> QImage -> Numpy
+            qimg = pixmap.toImage().convertToFormat(4) # QImage.Format_RGB32
+            width = qimg.width()
+            height = qimg.height()
+            ptr = qimg.bits()
+            ptr.setsize(height * width * 4)
+            arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
+            
+            # 複製 RGB (忽略原本 Alpha)
+            img_bgr = arr[:, :, :3].copy()
+
+            # 2. 灰階化
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+            # 3. 二值化 (Thresholding)
+            # 亮度 < 240 -> 前景 (255)
+            # 亮度 >= 240 -> 背景 (0)
+            thresh_val = 220
+            _, mask_fg = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)
+
+            # [Optional] 填補主體內部的洞
+            kernel_close = np.ones((5,5), np.uint8)
+            mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_CLOSE, kernel_close)
+
+            # 4. 遮罩擴張 (Dilation) - 製造白邊
+            # 擴張 10px -> Kernel size = 2 * 10 + 1 = 21
+            kernel_size = 10
+            kernel_dilate = np.ones((kernel_size, kernel_size), np.uint8)
+            mask_dilated = cv2.dilate(mask_fg, kernel_dilate, iterations=1)
+
+            # 5. 組合影像 (BGRA)
+            b, g, r = cv2.split(img_bgr)
+            
+            # 處裡 "雜訊白" -> "純白"
+            # 我們的目標: 
+            #   - mask_fg 覆蓋的區域 (主體) -> 保留原色
+            #   - mask_dilated 覆蓋但 mask_fg 沒覆蓋的區域 (邊框) -> 設為純白
+            #   - mask_dilated 以外 -> 透明 (Alpha=0)
+            
+            fg_locs = (mask_fg == 255) # 主體位置
+            
+            # 先將原圖所有非主體的位置都填成純白 (255, 255, 255)
+            # 這會包含 "邊框區" 以及 "背景區"
+            # 之後再透過 Alpha Channel 決定顯示範圍，這樣邊框就是純白的
+            final_b = b.copy()
+            final_g = g.copy()
+            final_r = r.copy()
+            
+            final_b[~fg_locs] = 255
+            final_g[~fg_locs] = 255
+            final_r[~fg_locs] = 255
+            
+            # Merge: B, G, R, Alpha(mask_dilated)
+            img_bgra = cv2.merge([final_b, final_g, final_r, mask_dilated])
+
+            # 6. BGRA -> QImage -> QPixmap
+            h, w, ch = img_bgra.shape
+            bytes_per_line = ch * w
+            final_qimg = QImage(img_bgra.data, w, h, bytes_per_line, QImage.Format_ARGB32).copy()
+            
+            return QPixmap.fromImage(final_qimg)
+
+        except Exception as e:
+            print(f"[PhotoSelector] Auto-processing failed: {e}")
+            return pixmap
+
     def set_image(self, path, size):
         pix = QPixmap(path)
         if pix and not pix.isNull():
-            self._raw_pix = pix
-            scaled = pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # [新增] 自動影像處理 (去背+白邊)
+            try:
+                processed_pix = self.process_transparent_border(pix)
+            except Exception:
+                processed_pix = pix
+
+            self._raw_pix = processed_pix
+            
+            # 使用處理後的圖片進行縮放
+            # Qt.KeepAspectRatio -> 確保整張顯示，不裁切
+            scaled = processed_pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            
             final = QPixmap(size, size)
             final.fill(Qt.transparent)
             p = QPainter(final)
             p.setRenderHint(QPainter.Antialiasing)
+            
+            # 雖然圖片已經去背，但我們還是保留圓角外框裁切，讓整體風格一致 (圓角矩形)
             path_draw = QPainterPath()
             path_draw.addRoundedRect(0, 0, size, size, 15, 15)
             p.setClipPath(path_draw)
+            
             x = (size - scaled.width()) // 2
             y = (size - scaled.height()) // 2
             p.drawPixmap(x, y, scaled)
             p.end()
+            
             # store display pixmap for fast reuse
             self._display_pix = final
-            # do not call setPixmap here when pre-rendering larger size
 
     def enterEvent(self, event):
         self.hovered.emit(self)
