@@ -426,8 +426,63 @@ class PhotoSelectorOverlay(QWidget):
              root = project_root
 
         images_root = os.path.join(root, "assets", "images")
-        self._cursor_img_hover = os.path.join(images_root, "wood_hammer1.png")
-        self._cursor_img_click = os.path.join(images_root, "wood_hammer2.png")
+        self._cursor_img_hover_path = os.path.join(images_root, "wood_hammer1.png")
+        self._cursor_img_click_path = os.path.join(images_root, "wood_hammer2.png")
+        
+        # 預先載入游標以避免延遲
+        self._cursor_hover = None
+        self._cursor_click = None
+        self._load_cursors()
+
+    def _load_cursors(self):
+        try:
+            # Load Hover Cursor (Hammer Up)
+            if os.path.exists(self._cursor_img_hover_path):
+                pix = QPixmap(self._cursor_img_hover_path)
+                if not pix.isNull():
+                    pix = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    # 設定熱點在中心
+                    self._cursor_hover = QCursor(pix, pix.width()//2, pix.height()//2)
+
+            # Load Click Cursor (Hammer Down)
+            if os.path.exists(self._cursor_img_click_path):
+                pix = QPixmap(self._cursor_img_click_path)
+                if not pix.isNull():
+                    pix = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    # 設定熱點在中心
+                    self._cursor_click = QCursor(pix, pix.width()//2, pix.height()//2)
+        except Exception as e:
+            print(f"Error loading cursors: {e}")
+
+    def showEvent(self, event):
+        # 當 Overlay 顯示時，強制設定為木鎚游標
+        try:
+            if self._cursor_hover:
+                # 為了確保覆蓋，先清除所有舊的 override
+                while QApplication.overrideCursor() is not None:
+                    QApplication.restoreOverrideCursor()
+                QApplication.setOverrideCursor(self._cursor_hover)
+        except Exception:
+            pass
+        super().showEvent(event)
+
+    def mousePressEvent(self, event):
+        # 按下時切換為敲擊游標
+        if event.button() == Qt.LeftButton and self._cursor_click:
+            try:
+                QApplication.changeOverrideCursor(self._cursor_click)
+            except Exception:
+                pass
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # 放開時切換回舉起游標
+        if event.button() == Qt.LeftButton and self._cursor_hover:
+            try:
+                QApplication.changeOverrideCursor(self._cursor_hover)
+            except Exception:
+                pass
+        super().mouseReleaseEvent(event)
 
     def refresh_images(self):
         # Clear existing items
@@ -470,45 +525,43 @@ class PhotoSelectorOverlay(QWidget):
                 row += 1
 
     def on_photo_clicked(self, path):
-        # 更安全的選取處理流程：先發出訊號，短延遲後再由 hideEvent 統一處理關閉與游標還原
+        # 增加打擊感延遲：
+        # 1. 立即顯示槌子敲下 (wood_hammer2)
+        # 2. 強制刷新介面
+        # 3. 延遲 300ms 後才真正執行選取與關閉
         try:
             print(f"[PhotoSelector] Selected: {path}")
             if self._logpath:
                 with open(self._logpath, 'a', encoding='utf-8') as f:
                     f.write(f"PhotoSelector: clicked -> {path}\n")
+            
+            # 立即視覺回饋：切換到敲擊游標
+            if self._cursor_click:
+                QApplication.changeOverrideCursor(self._cursor_click)
+                QApplication.processEvents() # 強制刷新畫面確保游標改變
+                
         except Exception:
             pass
 
-        # 發出選取訊號（由 DisplayWindow / ControlWindow 接手後續處理）
-        try:
-            self.photoSelected.emit(path)
-        except Exception:
-            pass
-
-        # 切換到點擊游標（視覺回饋） -> [FIX] 移除以避免 Windows 崩潰 (Invalid cursor shape)
-        # try:
-        #     if os.path.exists(self._cursor_img_click):
-        #         pix = QPixmap(self._cursor_img_click)
-        #         if not pix.isNull():
-        #             sp = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        #             if self._prev_override is None:
-        #                 try:
-        #                     self._prev_override = QApplication.overrideCursor()
-        #                 except Exception:
-        #                     self._prev_override = None
-        #             QApplication.setOverrideCursor(QCursor(sp, sp.width()//2, sp.height()//2))
-        # except Exception:
-        #     pass
-
-        # 延遲隱藏 overlay，避免在 signal/slot 連鎖中立刻造成資源競爭
-        try:
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(120, lambda: self.hide())
-        except Exception:
+        # 定義延遲執行的動作
+        def delayed_action():
+            # 發出選取訊號（由 DisplayWindow / ControlWindow 接手後續處理）
+            try:
+                self.photoSelected.emit(path)
+            except Exception:
+                pass
+            # 隱藏 Overlay
             try:
                 self.hide()
             except Exception:
                 pass
+
+        # 設定 300ms 延遲，讓使用者看清楚敲擊動作
+        try:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(300, delayed_action)
+        except Exception:
+            delayed_action() # Fallback if timer fails
         
     def show_selector(self, prize_name=None):
         # 開啟選人視窗；可傳入 prize_name 以更新主標題
@@ -620,21 +673,6 @@ class PhotoSelectorOverlay(QWidget):
                 self.scroll.horizontalScrollBar().setValue(hval)
         except Exception:
             pass
-        # 3) 變更游標為木鎚（懸停圖） -> [FIX] 移除以避免 Windows 崩潰
-        # try:
-        #     if os.path.exists(self._cursor_img_hover):
-        #         pix = QPixmap(self._cursor_img_hover)
-        #         if not pix.isNull():
-        #             sp = pix.scaled(CURSOR_SIZE, CURSOR_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        #             # 儲存先前的 override（只儲存一次）
-        #             if self._prev_override is None:
-        #                 try:
-        #                     self._prev_override = QApplication.overrideCursor()
-        #                 except Exception:
-        #                     self._prev_override = None
-        #             QApplication.setOverrideCursor(QCursor(sp, sp.width()//2, sp.height()//2))
-        # except Exception:
-        #     pass
 
     def on_child_unhover(self, widget):
         # Called when a SelectablePhoto is unhovered.
@@ -649,27 +687,6 @@ class PhotoSelectorOverlay(QWidget):
             under = under.parent()
         # otherwise reset所有視覺狀態
         self.reset_focus()
-        # 還原游標（使用儲存的先前 override，或直接 restore）
-        try:
-            if self._prev_override is not None:
-                # 移除目前 override，並恢復先前儲存的 override（若存在）
-                try:
-                    QApplication.restoreOverrideCursor()
-                except Exception:
-                    pass
-                try:
-                    if self._prev_override is not None:
-                        QApplication.setOverrideCursor(self._prev_override)
-                except Exception:
-                    pass
-                self._prev_override = None
-            else:
-                try:
-                    QApplication.restoreOverrideCursor()
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
     def reset_focus(self):
         for i in range(self.grid_layout.count()):
