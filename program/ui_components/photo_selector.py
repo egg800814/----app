@@ -32,7 +32,11 @@ DIM_OPACITY = 0.4
 ANIM_DURATION_MS = 60
 # 游標尺寸（像素）。如需縮放游標圖示，調整此值。
 CURSOR_SIZE = 120
-PREVIEW_SCALE = 1.6
+PREVIEW_SCALE = 2.0  # [設定] 懸停時的放大倍率 (例如 1.6 代表放大 1.6 倍)
+
+# [設定] 照片參數
+IMAGE_QUALITY_SCALE = 4.0   # [設定] 清晰度設定：數字越大越清晰 (預設 4.0)
+SUBJECT_FILL_RATIO = 1.0   # [設定] 人物主體在格狀內的佔比 (0.1~1.0，預設 0.95)
 
 class SelectablePhoto(QLabel):
     hovered = pyqtSignal(object)  # emit self
@@ -52,8 +56,8 @@ class SelectablePhoto(QLabel):
         self._pix_normal = None
         self._pix_hover = None
         if os.path.exists(image_path):
-            # pre-render a larger pixmap (3.0x) to allow high quality zooming/preview
-            render_size = int(self.base_size * 3.0)
+            # pre-render a larger pixmap to allow high quality zooming/preview
+            render_size = int(self.base_size * IMAGE_QUALITY_SCALE) 
             self.set_image(image_path, render_size)
             
             # Initial display
@@ -153,10 +157,39 @@ class SelectablePhoto(QLabel):
             
             img_bgra = cv2.merge([final_b, final_g, final_r, mask_total])
 
+            # [新增] 自動裁切與標準化縮放 (Standardization)
+            # 1. 找出邊界框 (Bounding Box)
+            # 使用 alpha channel (mask_total) 來找
+            x, y, w, h = cv2.boundingRect(mask_total)
+            
+            if w > 0 and h > 0:
+                # 2. 裁切主體 (Crop)
+                img_crop = img_bgra[y:y+h, x:x+w]
+                
+                # 3. 計算縮放與建立正方形畫布 (Center on Canvas)
+                # 目標：讓主體的長邊佔畫布的 85% (保留 15% 留白，視覺舒適)
+                max_dim = max(w, h)
+                target_ratio = SUBJECT_FILL_RATIO
+                canvas_size = int(max_dim / target_ratio)
+                
+                # 建立全透明畫布
+                canvas = np.zeros((canvas_size, canvas_size, 4), dtype=np.uint8)
+                
+                # 4. 居中貼合
+                start_x = (canvas_size - w) // 2
+                start_y = (canvas_size - h) // 2
+                
+                canvas[start_y:start_y+h, start_x:start_x+w] = img_crop
+                
+                # 使用標準化後的 canvas 作為最終輸出
+                img_final = canvas
+            else:
+                img_final = img_bgra
+
             # 6. BGRA -> QImage -> QPixmap
-            h, w, ch = img_bgra.shape
+            h, w, ch = img_final.shape
             bytes_per_line = ch * w
-            final_qimg = QImage(img_bgra.data, w, h, bytes_per_line, QImage.Format_ARGB32).copy()
+            final_qimg = QImage(img_final.data, w, h, bytes_per_line, QImage.Format_ARGB32).copy()
             
             return QPixmap.fromImage(final_qimg)
 
@@ -425,7 +458,7 @@ class PhotoSelectorOverlay(QWidget):
         
         for f in files:
             full_path = os.path.join(self.real_dir, f)
-            photo = SelectablePhoto(full_path, size=300)
+            photo = SelectablePhoto(full_path, size=300) # [設定] 網格中照片的大小 (寬高像素)
             photo.clicked.connect(self.on_photo_clicked)
             photo.hovered.connect(self.on_child_hover)
             photo.unhovered.connect(self.on_child_unhover)
