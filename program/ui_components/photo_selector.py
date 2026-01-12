@@ -655,11 +655,14 @@ class PhotoSelectorOverlay(QWidget):
                 except Exception:
                     pass
                 # restore border and size if SelectablePhoto
+                # restore border and size if SelectablePhoto
                 if isinstance(w, SelectablePhoto):
-                    w.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+                    # 還原CSS: 移除邊框，改為透明
+                    w.setStyleSheet("background: transparent;")
                     w.setFixedSize(w.base_size, w.base_size)
-                    if w._raw_pix:
-                        w.set_image(w.image_path, w.base_size)
+                    # 還原圖片為正常版 (白邊)
+                    if hasattr(w, '_pix_normal') and w._pix_normal:
+                        w.setPixmap(w._pix_normal)
             except Exception:
                 pass
         # 隱藏並清理浮動放大預覽
