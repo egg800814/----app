@@ -45,30 +45,30 @@ class SelectablePhoto(QLabel):
         self.base_size = size
         self.setFixedSize(size, size)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+        # 移除 CSS 邊框，改用透明背景
+        self.setStyleSheet("background: transparent;")
 
         # store current pixmap for fast scaled display
-        self._raw_pix = None
-        self._display_pix = None
+        self._pix_normal = None
+        self._pix_hover = None
         if os.path.exists(image_path):
             # pre-render a larger pixmap (3.0x) to allow high quality zooming/preview
-            render_size = int(self.base_size * 10.0)
+            render_size = int(self.base_size * 3.0)
             self.set_image(image_path, render_size)
-            if self._raw_pix:
-                # set scaled contents so QLabel will scale pixmap with widget size
+            
+            # Initial display
+            if self._pix_normal:
                 self.setScaledContents(True)
-                self.setPixmap(self._display_pix.scaled(self.base_size, self.base_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+                self.setPixmap(self._pix_normal)
 
-    def process_transparent_border(self, pixmap):
+    def process_transparent_border(self, pixmap, border_color=(255, 255, 255), extra_dilation=0):
         """
-        自動影像處理流程：
+        自動影像處理流程 (支援自訂邊框顏色與額外擴張)：
         1. 轉換 QPixmap -> OpenCV image
-        2. 偵測非白色的主體 (Subject Detection) - 門檻值 240
+        2. 偵測非白色的主體 (Subject Detection) - 門檻值 220
         3. 建立遮罩 (Mask)
-        4. 遮罩擴張 (Dilation) 10px -> 透過白色邊框
-        5. 將背景去背 (Set Alpha)
-           - 遮罩內: 若原圖是 "背景白(>=240)", 強制轉為純白(255)
-           - 遮罩外: 透明
+        4. 遮罩擴張 (Dilation) -> 製造邊框
+        5. 將背景去背 (Set Alpha) 並上色邊框
         6. 轉換回 QPixmap
         """
         try:
@@ -80,52 +80,78 @@ class SelectablePhoto(QLabel):
             ptr.setsize(height * width * 4)
             arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
             
-            # 複製 RGB (忽略原本 Alpha)
             img_bgr = arr[:, :, :3].copy()
 
             # 2. 灰階化
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
             # 3. 二值化 (Thresholding)
-            # 亮度 < 240 -> 前景 (255)
-            # 亮度 >= 240 -> 背景 (0)
             thresh_val = 220
             _, mask_fg = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)
 
-            # [Optional] 填補主體內部的洞
+            # 填補孔洞
             kernel_close = np.ones((5,5), np.uint8)
             mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_CLOSE, kernel_close)
 
-            # 4. 遮罩擴張 (Dilation) - 製造白邊
-            # 擴張 10px -> Kernel size = 2 * 10 + 1 = 21
-            kernel_size = 10
+            # [新增] 輪廓篩選 (去雜訊)
+            # 找出所有輪廓 (RETR_EXTERNAL 只找外輪廓)
+            contours, _ = cv2.findContours(mask_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 建立乾淨的遮罩 (全黑)
+            mask_clean = np.zeros_like(mask_fg)
+            
+            # 設定面積門檻 (例如 500 px)，濾除太小的雜訊塊
+            min_area = 500 
+            
+            # 找出最大的輪廓 (比較保險的做法：假設最大的是人)
+            if contours:
+                # 方法 A: 只保留最大的一個主體 (最乾淨)
+                max_cnt = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(max_cnt) > min_area:
+                    cv2.drawContours(mask_clean, [max_cnt], -1, 255, thickness=cv2.FILLED)
+                
+                # 方法 B (備用): 保留所有大於門檻的區塊 (如果有人跟手分開的情況)
+                # for cnt in contours:
+                #     if cv2.contourArea(cnt) > min_area:
+                #         cv2.drawContours(mask_clean, [cnt], -1, 255, thickness=cv2.FILLED)
+            
+            # 更新 mask_fg 為過濾後的乾淨遮罩
+            mask_fg = mask_clean
+
+            # 4. 遮罩擴張 (Dilation) - 製造邊框
+            # 基本擴張 (10px) + 額外擴張 (for Hover)
+            base_dilation = 10
+            total_dilation = base_dilation + extra_dilation
+            kernel_size = 2 * total_dilation + 1 
             kernel_dilate = np.ones((kernel_size, kernel_size), np.uint8)
-            mask_dilated = cv2.dilate(mask_fg, kernel_dilate, iterations=1)
+            mask_total = cv2.dilate(mask_fg, kernel_dilate, iterations=1)
 
             # 5. 組合影像 (BGRA)
             b, g, r = cv2.split(img_bgr)
             
-            # 處裡 "雜訊白" -> "純白"
-            # 我們的目標: 
-            #   - mask_fg 覆蓋的區域 (主體) -> 保留原色
-            #   - mask_dilated 覆蓋但 mask_fg 沒覆蓋的區域 (邊框) -> 設為純白
-            #   - mask_dilated 以外 -> 透明 (Alpha=0)
+            # 邏輯：
+            # - mask_fg 覆蓋區域 -> 主體 (保留原色)
+            # - mask_total - mask_fg -> 邊框 (填入 border_color)
+            # - mask_total 以外 -> 透明
             
-            fg_locs = (mask_fg == 255) # 主體位置
+            fg_locs = (mask_fg == 255) # 主體
+            border_locs = (mask_total == 255) & (mask_fg == 0) # 邊框
             
-            # 先將原圖所有非主體的位置都填成純白 (255, 255, 255)
-            # 這會包含 "邊框區" 以及 "背景區"
-            # 之後再透過 Alpha Channel 決定顯示範圍，這樣邊框就是純白的
             final_b = b.copy()
             final_g = g.copy()
             final_r = r.copy()
             
-            final_b[~fg_locs] = 255
-            final_g[~fg_locs] = 255
-            final_r[~fg_locs] = 255
+            # 填入邊框顏色 (OpenCV is BGR)
+            # border_color 輸入預期是 (R, G, B)
+            bc_r, bc_g, bc_b = border_color
             
-            # Merge: B, G, R, Alpha(mask_dilated)
-            img_bgra = cv2.merge([final_b, final_g, final_r, mask_dilated])
+            final_b[border_locs] = bc_b
+            final_g[border_locs] = bc_g
+            final_r[border_locs] = bc_r
+            
+            # [Optional] 如果原本圖片的主體有雜點，也可以在這裡過濾，但通常保留原圖較自然
+            
+            img_bgra = cv2.merge([final_b, final_g, final_r, mask_total])
 
             # 6. BGRA -> QImage -> QPixmap
             h, w, ch = img_bgra.shape
@@ -138,43 +164,52 @@ class SelectablePhoto(QLabel):
             print(f"[PhotoSelector] Auto-processing failed: {e}")
             return pixmap
 
+    def _apply_scaling_and_clipping(self, pixmap, size):
+        """Helper to scale and apply rounded rect clipping."""
+        if not pixmap or pixmap.isNull():
+            return QPixmap()
+
+        scaled = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        final = QPixmap(size, size)
+        final.fill(Qt.transparent)
+        p = QPainter(final)
+        p.setRenderHint(QPainter.Antialiasing)
+        
+        path_draw = QPainterPath()
+        path_draw.addRoundedRect(0, 0, size, size, 15, 15)
+        p.setClipPath(path_draw)
+        
+        x = (size - scaled.width()) // 2
+        y = (size - scaled.height()) // 2
+        p.drawPixmap(x, y, scaled)
+        p.end()
+        return final
+
     def set_image(self, path, size):
         pix = QPixmap(path)
         if pix and not pix.isNull():
-            # [新增] 自動影像處理 (去背+白邊)
+            # 1. 產生 [一般狀態] 圖片：白色邊框
             try:
-                processed_pix = self.process_transparent_border(pix)
+                processed_normal_pix = self.process_transparent_border(pix, border_color=(255, 255, 255), extra_dilation=0)
+                self._pix_normal = self._apply_scaling_and_clipping(processed_normal_pix, size)
             except Exception:
-                processed_pix = pix
+                self._pix_normal = self._apply_scaling_and_clipping(pix, size)
+                
+            # 2. 產生 [懸停狀態] 圖片：金色邊框 (241, 196, 15) (#f1c40f)，且更粗一點
+            try:
+                processed_hover_pix = self.process_transparent_border(pix, border_color=(241, 196, 15), extra_dilation=8)
+                self._pix_hover = self._apply_scaling_and_clipping(processed_hover_pix, size)
+            except Exception:
+                self._pix_hover = self._apply_scaling_and_clipping(pix, size)
 
-            self._raw_pix = processed_pix
-            
-            # 使用處理後的圖片進行縮放
-            # Qt.KeepAspectRatio -> 確保整張顯示，不裁切
-            scaled = processed_pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            
-            final = QPixmap(size, size)
-            final.fill(Qt.transparent)
-            p = QPainter(final)
-            p.setRenderHint(QPainter.Antialiasing)
-            
-            # 雖然圖片已經去背，但我們還是保留圓角外框裁切，讓整體風格一致 (圓角矩形)
-            path_draw = QPainterPath()
-            path_draw.addRoundedRect(0, 0, size, size, 15, 15)
-            p.setClipPath(path_draw)
-            
-            x = (size - scaled.width()) // 2
-            y = (size - scaled.height()) // 2
-            p.drawPixmap(x, y, scaled)
-            p.end()
-            
-            # store display pixmap for fast reuse
-            self._display_pix = final
 
     def enterEvent(self, event):
         self.hovered.emit(self)
         # visual: change border color only (keep width constant to avoid layout shifts)
-        self.setStyleSheet(f"border: {BORDER_WIDTH}px solid {HOVER_BORDER_COLOR}; border-radius: 15px; background: transparent;")
+        # self.setStyleSheet(f"border: {BORDER_WIDTH}px solid {HOVER_BORDER_COLOR}; border-radius: 15px; background: transparent;")
+        if self._pix_hover:
+            self.setPixmap(self._pix_hover)
         # Create a transient shadow effect for glow
         try:
             shadow = QGraphicsDropShadowEffect(self)
@@ -198,15 +233,13 @@ class SelectablePhoto(QLabel):
     def leaveEvent(self, event):
         self.unhovered.emit(self)
         # revert visuals
-        self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+        # self.setStyleSheet("border: 4px solid rgba(255, 255, 255, 1); border-radius: 15px; background: transparent;")
+        if self._pix_normal:
+            self.setPixmap(self._pix_normal)
+            
         # Remove any graphics effect (shadow) to restore original look
         try:
             self.setGraphicsEffect(None)
-        except Exception:
-            pass
-        try:
-            if self._display_pix:
-                self.setPixmap(self._display_pix.scaled(self.width(), self.height(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
         except Exception:
             pass
         super().leaveEvent(event)
@@ -490,11 +523,16 @@ class PhotoSelectorOverlay(QWidget):
             if not self._highlight_label:
                 self._highlight_label = QLabel(self)
                 self._highlight_label.setAttribute(Qt.WA_TransparentForMouseEvents)
-                self._highlight_label.setStyleSheet('border: 5px solid %s; border-radius: 18px;' % HOVER_BORDER_COLOR)
-            # 使用 SelectablePhoto 預先渲染的 pixmap 作為來源，保持品質
+                # 移除方形邊框，因為圖片本身已有發光輪廓
+                self._highlight_label.setStyleSheet("background: transparent;")
+                
+            # 使用 SelectablePhoto 預先渲染的 pixmap (使用 hover 版本) 作為來源
             try:
-                if widget._display_pix:
-                    pix = widget._display_pix.scaled(preview_size, preview_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                # 優先使用 _pix_hover (有金邊效果)，若無則用 _pix_normal
+                source_pix = widget._pix_hover if widget._pix_hover else widget._pix_normal
+                
+                if source_pix:
+                    pix = source_pix.scaled(preview_size, preview_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                     self._highlight_label.setPixmap(pix)
                     self._highlight_label.setFixedSize(preview_size, preview_size)
                     # 計算浮動位置：以被懸停照片中心為中心點
