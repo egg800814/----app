@@ -236,7 +236,7 @@ class DisplayWindow(QWidget):
         # 1. current_offset_x (水平偏移): 正數往右，負數往左
         # 2. current_margin_bottom (底部距離): 數值越大離底部越遠
         # ---------------------------------------------------------
-        self.current_offset_x = 1000
+        self.current_offset_x = 600
         self.current_margin_bottom = 150
         # ---------------------------------------------------------
 
