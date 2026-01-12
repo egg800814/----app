@@ -1,3 +1,12 @@
+"""
+photo_selector.py
+-----------------
+描述：選人模式的照片選擇器 (Overlay)。
+功能：
+      1. 提供一個全螢幕的覆蓋層，顯示 assets/presenters 中的所有候選人照片。
+      2. 支援圖片網格排列、懸停放大預覽、以及點擊選取功能。
+      3. 選取照片後，會將圖片路徑回傳給控制端或大螢幕更新轉盤中心頭像。
+"""
 import os
 import sys
 from PyQt5.QtWidgets import (QWidget, QApplication, QVBoxLayout, QGridLayout, QLabel, 

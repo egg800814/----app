@@ -1,3 +1,11 @@
+"""
+config.py
+---------
+描述：全域設定與工具函式庫。
+功能：
+      1. 定義應用程式共用的常數 (如 COLORS 配色表)。
+      2. 提供資源路徑解析函式 (resource_path)，解決開發環境與打包環境 (PyInstaller) 的路徑差異問題。
+"""
 import sys
 import os
 from PyQt5.QtGui import QColor
