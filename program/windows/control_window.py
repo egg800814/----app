@@ -259,10 +259,10 @@ class ControlWindow(QMainWindow):
         hbox_peg = QHBoxLayout()
         self.slider_peg = QSlider(Qt.Horizontal)
         self.slider_peg.setRange(0, 100)
-        self.slider_peg.setValue(77) 
+        self.slider_peg.setValue(31) # [修改] 對應 0.64 (0.5 + 31*0.0045)
         self.slider_peg.valueChanged.connect(self.update_physics_params)
         
-        self.lbl_peg_val = QLabel("0.85")
+        self.lbl_peg_val = QLabel("0.64")
         self.lbl_peg_val.setFixedWidth(50)
         self.lbl_peg_val.setStyleSheet("color: yellow; font-size: 15px;") # [修改] 數值強調
         
@@ -420,12 +420,12 @@ class ControlWindow(QMainWindow):
 
     def reset_physics_params(self):
         """[物理參數] 恢復預設值"""
-        # 預設值: Base=0.990, Peg=0.850
+        # 預設值: Base=0.990, Peg=0.640
         # 反推 Slider 值
         # 0.990 = 0.95 + x * 0.049  => x ~= 0.816 -> 82
-        # 0.850 = 0.50 + y * 0.45   => y ~= 0.777 -> 78
+        # 0.640 = 0.50 + y * 0.45   => y ~= 0.311 -> 31
         self.slider_base.setValue(82)
-        self.slider_peg.setValue(78)
+        self.slider_peg.setValue(31)
         self.update_physics_params() # Apply
 
     # -------------------------------------------------------------

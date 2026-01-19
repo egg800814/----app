@@ -38,7 +38,7 @@ class LuckyWheelWidget(QWidget):
         self.rotation_speed = 0
         self.is_spinning = False
         self.base_friction = 0.99 # 一般滑行摩擦力 (阻力小)
-        self.peg_friction = 0.85  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
+        self.peg_friction = 0.64  # 撞針摩擦力 (阻力大，模擬碰到擋板減速)
         self.friction = self.base_friction # 當前摩擦力
         
         # 音效設定
