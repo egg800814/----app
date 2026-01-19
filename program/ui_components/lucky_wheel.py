@@ -86,16 +86,25 @@ class LuckyWheelWidget(QWidget):
         self.is_hovering_center = False
         self.breath_phase = 0.0 # 呼吸燈相位
         
-        # 載入槌子游標
+        # 載入槌子游標 (一般狀態)
         self.hammer_cursor = None
+        self.hammer_pressed_cursor = None
+        
         hammer_path = resource_path("assets/images/wood_hammer1.png")
         if os.path.exists(hammer_path):
-            # 縮放至適當大小，例如 128x128
             pix = QPixmap(hammer_path).scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            # 設定熱點 (Hotspot)，設為圖片中心看起來比較像拿在手上
             self.hammer_cursor = QCursor(pix, 20, 20)
         else:
             self.hammer_cursor = Qt.PointingHandCursor
+            
+        # 載入槌子游標 (敲擊狀態)
+        hammer_pressed_path = resource_path("assets/images/wood_hammer2.png")
+        if os.path.exists(hammer_pressed_path):
+            pix_pressed = QPixmap(hammer_pressed_path).scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.hammer_pressed_cursor = QCursor(pix_pressed, 20, 20)
+        else:
+            # Fallback to normal if pressed not found
+            self.hammer_pressed_cursor = self.hammer_cursor
 
     def _load_loop_sound(self, filename):
         if os.path.exists(filename):
@@ -522,6 +531,10 @@ class LuckyWheelWidget(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.is_hovering_center:
+            # [新增] 切換為敲擊游標
+            if self.hammer_pressed_cursor:
+                self.setCursor(self.hammer_pressed_cursor)
+            
             self.start_holding()
         super().mousePressEvent(event)
 
@@ -530,6 +543,13 @@ class LuckyWheelWidget(QWidget):
             # 只有在 holding 狀態下放開才算
             if self.is_holding:
                 self.release_holding()
+            
+            # [新增] 恢復為一般槌子游標 (若還在 Hover 狀態)
+            if self.is_hovering_center and self.hammer_cursor:
+                 self.setCursor(self.hammer_cursor)
+            elif not self.is_hovering_center:
+                 self.unsetCursor()
+                 
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
