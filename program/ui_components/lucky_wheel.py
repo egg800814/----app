@@ -377,27 +377,47 @@ class LuckyWheelWidget(QWidget):
             else:
                 self.last_sector_index = current_index
 
-        # [修正] 停止條件
-        # 必須同時滿足：
-        # 1. 速度極低
-        # 2. 不受顯著外力 (代表已經滑進扇區中間，不在擋板上)
-        is_stable = False
-        if n > 0:
-             # 檢查是否在穩定的中間區域 (沒受擋板力)
-             # 即 offset > peg_influence AND dist_from_end > peg_influence
-             offset = (270 - self.current_angle) % slice_angle
-             dist_from_end = 360/n - offset
-             if offset > peg_influence and dist_from_end > peg_influence:
-                 is_stable = True
+        # [新增] 死不停車 (Anti-Stall) 機制
+        # 確保不會停在邊界危險區 (+/- 2度)
+        should_stop = False
         
-        if abs(self.rotation_speed) <= 0.05 and self.is_spinning and is_stable:
+        if n > 0:
+            slice_angle = 360 / n
+            offset = (270 - self.current_angle) % slice_angle
+            dist_from_end = slice_angle - offset
+            
+            danger_zone = 2.0 # 危險區範圍 (度)
+            in_danger_zone = (offset < danger_zone) or (dist_from_end < danger_zone)
+            
+            # 如果在危險區且速度快停了，強制給予蠕動速度
+            if self.is_spinning and in_danger_zone and abs(self.rotation_speed) < 0.2:
+                if offset < danger_zone:
+                    # 靠近起點 (Offset ~= 0)，往回滑 (增加 Offset) -> 速度負
+                    # 意即：這是上一個扇區的「尾巴」還是這個扇區的「頭」？
+                    # Offset=0 是這個扇區的開始。往回滑會進入上一個扇區。
+                    # User: "entering the safe range in the center"
+                    # 其實只要離開線就好。
+                    self.rotation_speed = -0.15
+                else:
+                    # 靠近終點，往前滑
+                    self.rotation_speed = 0.15
+
+            # 只有當「不在危險區」且「速度極低」時，才允許完全停止
+            # 這裡把 0.05 視為靜止閾值
+            if not in_danger_zone and abs(self.rotation_speed) <= 0.05:
+                should_stop = True
+        else:
+             if abs(self.rotation_speed) <= 0.05:
+                 should_stop = True
+
+        if should_stop and self.is_spinning:
              self.rotation_speed = 0
              self.timer.stop()
              self.is_spinning = False
              self._stop_all_loops()
              
              winner = self.items[current_index]
-             # [調整] 轉盤停下後，停頓 1 秒再彈出中獎畫面 (原本是 3秒 太久了)
+             # [調整] 轉盤停下後，停頓 1 秒再彈出中獎畫面
              QTimer.singleShot(1000, lambda: self._emit_finished(winner))
         
         self.update()
