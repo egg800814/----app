@@ -13,12 +13,13 @@ import random
 import math
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QRectF, pyqtSignal, pyqtProperty, QPoint
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap, QBrush, QLinearGradient
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QRadialGradient, QPainterPath, QPixmap, QBrush, QLinearGradient, QCursor
 from PyQt5.QtMultimedia import QSoundEffect
 from utils.config import COLORS, resource_path
 
 class LuckyWheelWidget(QWidget):
     spinFinished = pyqtSignal(str)
+    spinStarted = pyqtSignal() # [新增] 開始轉動訊號
     
     def get_angle(self):
         return self.current_angle
@@ -77,9 +78,24 @@ class LuckyWheelWidget(QWidget):
         # 震動特效偏移量
         self.shake_offset = QPoint(0, 0)
         
-        # [新增] 長按互動旗標
         self.is_holding = False
         self.max_speed = 50.0
+
+        # [新增] 互動相關
+        self.setMouseTracking(True) # 啟用滑鼠追蹤以偵測 Hover
+        self.is_hovering_center = False
+        self.breath_phase = 0.0 # 呼吸燈相位
+        
+        # 載入槌子游標
+        self.hammer_cursor = None
+        hammer_path = resource_path("assets/images/wood_hammer1.png")
+        if os.path.exists(hammer_path):
+            # 縮放至適當大小，例如 128x128
+            pix = QPixmap(hammer_path).scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # 設定熱點 (Hotspot)，設為圖片中心看起來比較像拿在手上
+            self.hammer_cursor = QCursor(pix, 20, 20)
+        else:
+            self.hammer_cursor = Qt.PointingHandCursor
 
     def _load_loop_sound(self, filename):
         if os.path.exists(filename):
@@ -139,6 +155,9 @@ class LuckyWheelWidget(QWidget):
             # 呼吸燈模式
             self.led_phase += 0.4 # 加快速度製造緊張感
         
+        # 更新呼吸相位
+        self.breath_phase += 0.1
+        
         # 如果沒有在轉動 (update_spin 沒在跑)，這裡要觸發 update 讓 LED 動起來
         if not self.is_spinning:
             self.update()
@@ -169,6 +188,7 @@ class LuckyWheelWidget(QWidget):
         initial_mode = 'fast' if self.rotation_speed > 20 else 'tick'
         self._update_sound_volumes(initial_mode)
         self.current_sound_mode = initial_mode
+        self.spinStarted.emit()
         
         self.timer.start(10)
 
@@ -179,6 +199,7 @@ class LuckyWheelWidget(QWidget):
         
         self.is_spinning = True
         self.is_holding = True
+        self.spinStarted.emit()
         
         # 若是剛開始，速度歸零開始加速
         if not self.timer.isActive():
@@ -471,6 +492,46 @@ class LuckyWheelWidget(QWidget):
         winner = self.items[index]
         self.spinFinished.emit(winner)
 
+    # [新增] 滑鼠互動事件
+    def mouseMoveEvent(self, event):
+        rect = self.rect()
+        radius = min(rect.width(), rect.height()) / 2 * 0.8
+        logo_radius = radius * 0.25
+        center = rect.center()
+
+        # 計算滑鼠距離圓心的距離
+        dx = event.x() - center.x()
+        dy = event.y() - center.y()
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        if dist < logo_radius:
+            if not self.is_hovering_center:
+                self.is_hovering_center = True
+                if self.hammer_cursor:
+                    self.setCursor(self.hammer_cursor)
+                else:
+                    self.setCursor(Qt.PointingHandCursor)
+                self.update() # 觸發重繪以顯示 Hover 效果
+        else:
+            if self.is_hovering_center:
+                self.is_hovering_center = False
+                self.unsetCursor()
+                self.update()
+
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.is_hovering_center:
+            self.start_holding()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # 只有在 holding 狀態下放開才算
+            if self.is_holding:
+                self.release_holding()
+        super().mouseReleaseEvent(event)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -569,6 +630,31 @@ class LuckyWheelWidget(QWidget):
         # 4. 中心區域 (抽獎人頭像 或 LOGO)
         # 如果有抽獎人頭像，優先顯示；否則顯示 LOGO
         logo_radius = radius * 0.25
+        
+        # [新增] Hover 放大效果
+        if self.is_hovering_center:
+            logo_radius *= 1.1
+
+        # [新增] 繪製呼吸光圈 (Breathing Glow Ring)
+        # 只有在靜止或 Hover 時顯示比較明顯
+        if not self.is_spinning or self.is_hovering_center:
+             painter.save()
+             glow_radius = logo_radius * (1.05 + 0.05 * math.sin(self.breath_phase))
+             glow_alpha = int(100 + 50 * math.sin(self.breath_phase))
+             if self.is_hovering_center: # Hover 時更亮更大
+                 glow_radius *= 1.05
+                 glow_alpha = min(255, glow_alpha + 50)
+             
+             radial_glow = QRadialGradient(center, glow_radius)
+             radial_glow.setColorAt(0.5, QColor(255, 215, 0, 0)) # 內圈透明
+             radial_glow.setColorAt(0.8, QColor(255, 215, 0, glow_alpha)) # 金色外發光
+             radial_glow.setColorAt(1.0, QColor(255, 215, 0, 0))
+             
+             painter.setBrush(radial_glow)
+             painter.setPen(Qt.NoPen)
+             painter.drawEllipse(center, glow_radius, glow_radius)
+             painter.restore()
+
         painter.setBrush(Qt.white)
         painter.setPen(QPen(QColor(218, 165, 32), 5))
         painter.drawEllipse(center, logo_radius, logo_radius)
@@ -600,6 +686,22 @@ class LuckyWheelWidget(QWidget):
             painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
             painter.setFont(QFont("Microsoft JhengHei", 10, QFont.Bold))
             painter.drawText(QRectF(lx, ly, label_w, label_h), Qt.AlignCenter, "抽獎人")
+
+        # [新增] Hover 懸停文字 "START"
+        if self.is_hovering_center and not self.is_spinning:
+            painter.save()
+            # 半透明黑底圓形遮罩
+            painter.setBrush(QColor(0, 0, 0, 100))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(center, logo_radius, logo_radius)
+            
+            # 繪製文字
+            font = QFont("Arial", int(logo_radius * 0.4), QFont.Bold)
+            painter.setFont(font)
+            painter.setPen(Qt.white)
+            painter.drawText(QRectF(center.x()-logo_radius, center.y()-logo_radius, logo_radius*2, logo_radius*2), 
+                           Qt.AlignCenter, "START")
+            painter.restore()
 
         # [新增] 聚光燈特效 (轉動時背景變暗，聚焦於指針)
         if self.is_spinning:

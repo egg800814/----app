@@ -536,7 +536,7 @@ class ControlWindow(QMainWindow):
         
         # [修改] 發布時，如果大螢幕還在中獎畫面，這也是一種 "重置" 訊號
         self.display_window.hide_winner_message()
-        self.display_window.spin_btn.setEnabled(True)
+        # self.display_window.spin_btn.setEnabled(True) # [移除]
         
         msg = QMessageBox(self)
         msg.setWindowTitle("發布成功")
@@ -639,7 +639,7 @@ class ControlWindow(QMainWindow):
     def on_remote_spin_started(self):
         """當大螢幕開始轉動 (長按) 時，鎖定系統端按鈕"""
         self.sys_spin_btn.setEnabled(False)
-        self.display_window.spin_btn.setEnabled(False) # 確保這裡也鎖定
+        # self.display_window.spin_btn.setEnabled(False) # [移除]
 
     def master_start_spin(self):
         """主控端與顯示端同步啟動"""
@@ -655,7 +655,7 @@ class ControlWindow(QMainWindow):
         self.display_window.wheel.start_spin()
         
         # 3. UI 狀態
-        self.display_window.spin_btn.setEnabled(False)
+        # self.display_window.spin_btn.setEnabled(False) #[移除]
         self.sys_spin_btn.setEnabled(False)
 
     def on_spin_finished(self, winner_name):
@@ -690,7 +690,7 @@ class ControlWindow(QMainWindow):
             self.display_window.overlay.hide()
             self.display_window.set_focus_mode(False)
             self.sys_spin_btn.setEnabled(True)
-            self.display_window.spin_btn.setEnabled(True)
+            # self.display_window.spin_btn.setEnabled(True) # [移除]
 
     def confirm_winner(self, winner_name):
         # 1. 啟動彩帶 (音效已提前播放)
@@ -717,4 +717,4 @@ class ControlWindow(QMainWindow):
         # 4. 恢復一般模式
         self.display_window.set_focus_mode(False)
         self.sys_spin_btn.setEnabled(True)
-        self.display_window.spin_btn.setEnabled(True)
+        # self.display_window.spin_btn.setEnabled(True) # [移除]
