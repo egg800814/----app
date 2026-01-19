@@ -443,7 +443,7 @@ class ControlWindow(QMainWindow):
         """將目前的設定寫入 JSON"""
         data = {
             "prizes": self.prizes,
-            "prize_avatars": self.prize_avatars,
+            # "prize_avatars": self.prize_avatars, # [修改] 不存檔頭像，每次重啟重置
             "list_content": self.list_content,
             "current_prize_idx": self.prize_combo.currentIndex()
         }
@@ -476,8 +476,8 @@ class ControlWindow(QMainWindow):
             if "prizes" in data and isinstance(data["prizes"], list):
                 self.prizes = data["prizes"]
                 
-            if "prize_avatars" in data and isinstance(data["prize_avatars"], dict):
-                self.prize_avatars = data["prize_avatars"]
+            # if "prize_avatars" in data and isinstance(data["prize_avatars"], dict):
+            #     self.prize_avatars = data["prize_avatars"]
             
             # [恢復] 讀取存檔中的名單 (如果有)
             if "list_content" in data and isinstance(data["list_content"], str):
