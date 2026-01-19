@@ -1,0 +1,33 @@
+{
+    // 設定檢查的基礎模式，"standard" 是標準模式，比 basic 嚴格但比 strict 寬鬆
+    // 我們以此為基礎，然後下面手動關閉特定的煩人檢查
+    "typeCheckingMode": "standard",
+    // -----------------------------------------------------------
+    // 第一區：忽略「類型未知」的警告 (解決滿江紅的主因)
+    // -----------------------------------------------------------
+    // 忽略「引數類型未知」。當你呼叫第三方庫(如 OpenCV,某些舊庫)的函式，而它沒寫清楚參數類型時，不會報錯。
+    "reportUnknownArgumentType": false,
+    // 忽略「成員類型未知」。當你存取物件的屬性(例如 obj.x)，但編輯器不知道 x 是什麼類型時，不會報錯。
+    "reportUnknownMemberType": false,
+    // 忽略「變數類型未知」。當你定義變數但沒寫類型註解，且編輯器推斷不出來時，不會報錯。
+    "reportUnknownVariableType": false,
+    // -----------------------------------------------------------
+    // 第二區：忽略 PyQt/PySide 常見的誤判 (解決 C++ 轉 Python 的問題)
+    // -----------------------------------------------------------
+    // 忽略「屬性存取錯誤」。解決如 Qt.KeepAspectRatio 被誤判為不存在的問題。
+    "reportAttributeAccessIssue": false,
+    // 忽略「一般類型錯誤」。這是一個總開關，可以過濾掉很多因為動態類型導致的模糊錯誤。
+    "reportGeneralTypeIssues": false,
+    // 忽略「方法覆寫不相容」。解決 resizeEvent(self, event) 與父類別 (self, a0) 命名不同的問題。
+    "reportIncompatibleMethodOverride": false,
+    // 忽略「引數類型不符」。解決 signal.connect() 時，槽函數回傳 bool 但信號預期 None 的問題。
+    "reportArgumentType": false,
+    // -----------------------------------------------------------
+    // 第三區：邏輯與安全性 (請謹慎評估)
+    // -----------------------------------------------------------
+    // 忽略「可選成員存取」。解決 app.screenCount() 時，警告 app 可能是 None 的問題 (不想一直寫 assert 時用)。
+    "reportOptionalMemberAccess": false,
+    // (注意) 忽略「變數可能未定義」。解決 if/else 中變數可能沒賦值的警告。
+    // 建議：盡量修正程式碼邏輯(給預設值)，這行設為 false 雖然方便，但可能會導致執行時閃退。
+    "reportPossiblyUnboundVariable": false
+}
