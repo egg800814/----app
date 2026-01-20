@@ -129,17 +129,29 @@ class LuckyWheelWidget(QWidget):
         self.update()
 
     def set_presenter_avatar(self, image_path):
-        size = 100
+        size = 1800 # [修改] 提高解析度以適應大螢幕
         if image_path:
             original = QPixmap(image_path)
+            
+            # [修正] 保持比例縮放並置中裁切 (Center Crop)，避免變形
+            scaled_pix = original.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            
             self.presenter_pixmap = QPixmap(size, size)
             self.presenter_pixmap.fill(Qt.transparent)
+            
             painter = QPainter(self.presenter_pixmap)
             painter.setRenderHint(QPainter.Antialiasing)
+            
+            # 設定圓形遮罩
             path = QPainterPath()
             path.addEllipse(0, 0, size, size)
             painter.setClipPath(path)
-            painter.drawPixmap(0, 0, size, size, original)
+            
+            # 計算置中偏移量
+            x_offset = (size - scaled_pix.width()) // 2
+            y_offset = (size - scaled_pix.height()) // 2
+            
+            painter.drawPixmap(x_offset, y_offset, scaled_pix)
             painter.end()
         else:
             self.presenter_pixmap = None
