@@ -32,7 +32,7 @@ REM 格式為 "來源資料夾;目標資料夾"，如果有多個請用空格分
 REM 例如: --add-data "assets;assets" --add-data "config;config"
 REM 如果不需要打包資料，請清空 DATA_OPTS
 REM ---------------------------------------------------------------------
-set DATA_OPTS=--add-data "program/assets;assets" --add-data "program/ui_files;ui_files"
+set DATA_OPTS=--add-data "program/assets;assets" --add-data "program/ui_components;ui_components"
 
 REM ---------------------------------------------------------------------
 REM [修改注意 5] 設定需要搜尋的模組路徑或隱藏匯入
