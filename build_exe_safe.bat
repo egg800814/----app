@@ -32,7 +32,7 @@ REM 格式為 "來源資料夾;目標資料夾"，如果有多個請用空格分
 REM 例如: --add-data "assets;assets" --add-data "config;config"
 REM 如果不需要打包資料，請清空 DATA_OPTS
 REM ---------------------------------------------------------------------
-set DATA_OPTS=--add-data "program/assets;assets" --add-data "program/ui_components;ui_components"
+set DATA_OPTS=--add-data "assets;assets"
 
 REM ---------------------------------------------------------------------
 REM [修改注意 5] 設定需要搜尋的模組路徑或隱藏匯入
@@ -74,7 +74,7 @@ echo Mounting project to drive %BUILD_DRIVE% ...
 subst %BUILD_DRIVE% "%~dp0."
 if %errorlevel% neq 0 (
     echo [Error] Failed to mount virtual drive.
-    pause
+
     exit /b 1
 )
 
@@ -112,7 +112,7 @@ if %BUILD_RESULT% neq 0 (
     echo ========================================================
     echo.
     echo Please check the error messages above.
-    pause
+
     exit /b 1
 )
 
@@ -124,4 +124,4 @@ echo.
 echo The executable is located at:
 echo    %~dp0dist\%EXE_NAME%.exe
 echo.
-pause
+
