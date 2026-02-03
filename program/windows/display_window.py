@@ -103,7 +103,7 @@ class DisplayWindow(QWidget):
         left_layout = QVBoxLayout(self.left_container)
         
         # 頂部：目前抽獎項目標題
-        self.prize_label = QLabel("🎉 MDIT 尾牙抽獎活動準備中 🎉")
+        self.prize_label = QLabel("🎉 MDIT 尾牙抽獎活動 🎉")
         self.prize_label.setAlignment(Qt.AlignCenter)
         self.prize_label.setStyleSheet("""
             QLabel {
